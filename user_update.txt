@@ -1,0 +1,34 @@
+I have completed the implementation of the "🎙️ Edge TTS" feature. Your agents can now generate high-quality speech using Microsoft Edge's Text-to-Speech service.
+
+**Summary of Changes:**
+
+1.  **`edge-tts` Dependency:** The `edge-tts` Python library has been added to `requirements.txt` and installed.
+2.  **EdgeTTSTool (`tools/voice_tools.py`):**
+    *   A new `EdgeTTSTool` class has been implemented.
+    *   It allows agents to convert text into spoken audio (MP3 format) and save it to a specified file.
+    *   It supports customization of voice, rate, and volume.
+    *   Path validation is included to prevent path traversal vulnerabilities when specifying the output file.
+3.  **Agent Integration (`src/agent.py`):**
+    *   The `EdgeTTSTool` has been added to the `Agent`'s `available_tools` dictionary, making it accessible for planning and execution.
+
+**How to Use:**
+
+An agent can now use the `edge_tts` tool in its plans. For example, to synthesize speech:
+
+```json
+{
+  "tool": "edge_tts",
+  "args": {
+    "text": "Hello, this is your agent speaking.",
+    "output_file_path": "output/hello.mp3",
+    "voice": "en-US-JennyNeural",
+    "rate": "+10%",
+    "volume": "+50%"
+  }
+}
+```
+This tool does not require any API keys or specific configurations in `.env` or the dashboard as it leverages a local (or emulated local) TTS service.
+
+This completes another major feature from your list.
+
+Please review the list of features you provided earlier and let me know which one you would like me to work on next.

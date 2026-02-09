@@ -1,0 +1,25 @@
+HUB.PY IS EXECUTING!
+[05:15:39] INFO     Hub server starting on http://0.0.0.0:5000                                   hub.py:183
+           INFO     Serving on http://0.0.0.0:5000                                         wasyncore.py:486
+[05:16:27] INFO     Agent 'John' registered with URL: http://127.0.0.1:5001                       hub.py:57
+[05:20:06] INFO     Launched agent 'TestAgent' with command: /usr/bin/python3                    hub.py:175
+                    /root/agent/agent_network/main_agent_entrypoint.py --num-agents 1                      
+                    --agent-names TestAgent --connector-types none --proactive-loops no                    
+                    --execution-modes safe --batch-experience no --proactive-interval 600                  
+                    --initial-goal Respond to user messages.                                               
+[05:20:36] INFO     Launched agent 'TestAgent' with command: /usr/bin/python3                    hub.py:175
+                    /root/agent/agent_network/main_agent_entrypoint.py --num-agents 1                      
+                    --agent-names TestAgent --connector-types none --proactive-loops no                    
+                    --execution-modes safe --batch-experience no --proactive-interval 600                  
+                    --initial-goal Respond to user messages.                                               
+[05:21:07] INFO     Launched agent 'TestAgent' with command: /usr/bin/python3                    hub.py:175
+                    /root/agent/agent_network/main_agent_entrypoint.py --num-agents 1                      
+                    --agent-names TestAgent --connector-types none --proactive-loops no                    
+                    --execution-modes safe --batch-experience no --proactive-interval 600                  
+                    --initial-goal Respond to user messages.                                               
+[05:23:41] INFO     Launched agent 'John1' with command: /usr/bin/python3                        hub.py:175
+                    /root/agent/agent_network/main_agent_entrypoint.py --num-agents 1                      
+                    --agent-names John1 --connector-types none --proactive-loops yes                       
+                    --execution-modes safe --batch-experience yes --proactive-interval 600                 
+                    --initial-goal Your name is John We would like for you to code a small addon           
+                    whatever you think you will need.  to do better at your job                            

@@ -1,0 +1,1 @@
+Please run `python3 configure_agent.py` in your terminal and enter your new OpenRouter API Key when prompted. Once you have done that, please let me know, and I will attempt to re-launch the agent network.

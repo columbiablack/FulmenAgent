@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Network Dashboard</title>
+    
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 1200px; margin: auto; background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1, h2 { color: #0056b3; }
+        .section { margin-bottom: 30px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+        .section:last-child { border-bottom: none; }
+        ul { list-style-type: none; padding: 0; }
+        li { background-color: #e9ecef; margin-bottom: 8px; padding: 10px; border-radius: 4px; }
+        .agent-status { display: flex; justify-content: space-between; }
+        .experience { background-color: #f8f9fa; border: 1px solid #dee2e6; padding: 10px; margin-bottom: 10px; border-radius: 4px; font-size: 0.9em; }
+        .experience-header { font-weight: bold; color: #007bff; margin-bottom: 5px; }
+        .experience-details { margin-left: 15px; }
+        pre { background-color: #e9ecef; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agent Network Dashboard</h1>
+        <p>Last updated: <span id="current-time"></span></p>
+        <button id="shutdown-hub-button" style="background-color: #dc3545; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 1em;">Shutdown Hub</button>
+
+        <div class="section">
+            <h2>Active Agents</h2>
+            {% if active_agents %}
+                <ul>
+                    {% for name, url in active_agents.items() %}
+                        <li class="agent-status">
+                            <div>
+                                <span><strong>{{ name }}</strong></span><br>
+                                <span>{{ url }}</span>
+                            </div>
+                            <div>
+                                <button class="shutdown-agent-button" data-agent-name="{{ name }}" style="background-color: #dc3545; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 0.8em; margin-left: 10px;">Shutdown Agent</button>
+                            </div>
+                        </li>
+                        <li>
+                            <form class="send-message-form" data-agent-name="{{ name }}" style="margin-top: 10px;">
+                                <input type="text" name="message" placeholder="Message to {{ name }}" style="width: 70%; padding: 5px; border: 1px solid #ccc; border-radius: 3px;">
+                                <button type="submit" style="background-color: #007bff; color: white; padding: 5px 10px; border: none; border-radius: 3px; cursor: pointer; font-size: 0.8em;">Send</button>
+                            </form>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p>No agents currently registered.</p>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <h2>Distilled Tips</h2>
+            {% if distilled_tips %}
+                <ul>
+                    {% for tip in distilled_tips %}
+                        <li>{{ tip }}</li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p>No tips distilled yet.</p>
+            {% endif %}
+        </div>
+
+        <div class="section">
+            <h2>Recent Experiences</h2>
+            {% if recent_experiences %}
+                {% for exp in recent_experiences %}
+                    <div class="experience">
+                        <div class="experience-header">
+                            Agent: {{ exp.agent_name }} | Task: {{ exp.task }} | Status: {{ exp.step_result.status }}
+                        </div>
+                        <div class="experience-details">
+                            <p><strong>Step:</strong> {{ exp.step.tool }} {{ exp.step.args }}</p>
+                            <p><strong>Result:</strong> <pre>{{ exp.step_result.output | default(exp.step_result.message, true) }}</pre></p>
+                            <p><strong>Reflection:</strong> {{ exp.reflection.feedback }}</p>
+                                                                                    <p><em>Timestamp: {{ exp.formatted_timestamp }}</em></p>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <p>No recent experiences.</p>
+            {% endif %}
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <script>
+        function updateTime() {
+            document.getElementById('current-time').textContent = moment().format('YYYY-MM-DD HH:mm:ss');
+        }
+        setInterval(updateTime, 1000); // Update every second
+        updateTime(); // Initial call
+
+        document.getElementById('shutdown-hub-button').addEventListener('click', function() {
+            if (confirm('Are you sure you want to shut down the Hub? This will stop all agents.')) {
+                fetch('/shutdown', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({})
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    if (data.status === 'success') {
+                        window.location.reload(); // Reload to show disconnected state
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('Failed to send shutdown request. Hub might already be down or unreachable.');
+                });
+            }
+        });
+
+        document.querySelectorAll('.shutdown-agent-button').forEach(button => {
+            button.addEventListener('click', function() {
+                const agentName = this.dataset.agentName;
+                if (confirm(`Are you sure you want to shut down agent "${agentName}"?`)) {
+                    fetch(`/shutdown_agent/${agentName}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({})
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        if (data.status === 'success') {
+                            window.location.reload(); // Reload to update agent list
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert(`Failed to send shutdown request to agent "${agentName}".`);
+                    });
+                }
+            });
+        });
+
+        document.querySelectorAll('.send-message-form').forEach(form => {
+            form.addEventListener('submit', function(event) {
+                event.preventDefault(); // Prevent default form submission
+                const agentName = this.dataset.agentName;
+                const messageInput = this.querySelector('input[name="message"]');
+                const message = messageInput.value;
+
+                if (!message.trim()) {
+                    alert('Message cannot be empty.');
+                    return;
+                }
+
+                fetch('/send_message_to_agent', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ agent_name: agentName, message: message })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    if (data.status === 'success') {
+                        messageInput.value = ''; // Clear input field
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert(`Failed to send message to agent "${agentName}".`);
+                });
+            });
+        });
+    </script>
+</body>
+</html>
