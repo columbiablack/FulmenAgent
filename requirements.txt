@@ -17,3 +17,4 @@ edge-tts
 openai>=1.0
 voyageai
 chromadb
+geopy

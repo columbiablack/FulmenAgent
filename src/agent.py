@@ -3,26 +3,29 @@ import logging
 import os
 import requests
 import time
-from typing import Any, Dict, List, Optional
+import threading
+from typing import Any, Dict, List, Optional, Tuple # Added Tuple
 from urllib.parse import urljoin
 import sys
 import subprocess
+import importlib.util # Added for dynamic plugin loading
+from pathlib import Path # Added for path manipulation
 
 # Imports for internal components
-from src.planner import Planner
-from src.memory import Memory
-from src.critic import Critic
-from src.executor import Executor
+from agent_network.src.planner import Planner
+from agent_network.src.memory import Memory
+from agent_network.src.critic import Critic
+from agent_network.src.executor import Executor
 
 # Imports for tools
-from tools.base_tool import BaseTool
-from tools.file_tools import ReadFileTool, WriteFileTool, ListDirectoryTool
-from tools.shell_tool import RunShellCommandTool
-from tools.utility_tools import PrintTaskTool, WebFetchTool, ImageAnalysisTool, SendImageTool, ImageGenerationTool, FinishTaskTool, SendUserMessageTool, SendAgentMessageTool, LLMCallTool
-from tools.email_tools import EmailCheckTool, EmailSendTool
-from tools.calendar_tools import CalendarCheckTool, CalendarAddEventTool
-from tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool
-from tools.contact_tools import AccessContactsTool
+from agent_network.tools.base_tool import BaseTool
+from agent_network.tools.file_tools import ReadFileTool, WriteFileTool, ListDirectoryTool
+from agent_network.tools.shell_tool import RunShellCommandTool
+from agent_network.tools.utility_tools import PrintTaskTool, WebFetchTool, ImageAnalysisTool, SendImageTool, ImageGenerationTool, FinishTaskTool, SendUserMessageTool, SendAgentMessageTool, LLMCallTool
+from agent_network.tools.email_tools import EmailCheckTool, EmailSendTool
+from agent_network.tools.calendar_tools import CalendarCheckTool, CalendarAddEventTool
+from agent_network.tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool
+from agent_network.tools.contact_tools import AccessContactsTool
 
 # Imports for Google Cloud credentials check for voice tools
 import google.auth
@@ -44,20 +47,119 @@ def _check_google_credentials() -> bool:
         logger.error(f"An unexpected error occurred while checking Google Cloud credentials: {e}", exc_info=True)
         return False
 
+def _load_plugins(agent_name: str, hub_url: str) -> List[Tuple[str, Dict[str, Any], List[BaseTool]]]:
+    """
+    Dynamically loads tools from the plugins directory, checking hub for enable/disable status.
+    Returns a list of (plugin_name, manifest, loaded_tools) for successfully loaded plugins.
+    """
+    loaded_plugins_data: List[Tuple[str, Dict[str, Any], List[BaseTool]]] = []
+    plugins_dir = Path(__file__).parent.parent / "plugins"
+    
+    if not plugins_dir.is_dir():
+        logger.info(f"Plugins directory not found at {plugins_dir}. No plugins will be loaded.")
+        return []
+
+    logger.info(f"Scanning for plugins in {plugins_dir}...")
+    for plugin_path in plugins_dir.iterdir():
+        if plugin_path.is_dir():
+            manifest_path = plugin_path / "manifest.json"
+            if manifest_path.is_file():
+                try:
+                    with open(manifest_path, 'r') as f:
+                        manifest = json.load(f)
+                    
+                    plugin_name = manifest.get('name', plugin_path.name)
+                    
+                    # --- Check Hub for Plugin Enable/Disable Status ---
+                    try:
+                        status_response = requests.get(urljoin(hub_url, f"/api/agent/{agent_name}/plugin_status/{plugin_name}"))
+                        status_response.raise_for_status()
+                        plugin_status = status_response.json().get("status", "enabled")
+                        if plugin_status == "disabled":
+                            logger.info(f"Plugin '{plugin_name}' is disabled by the hub. Skipping loading.")
+                            continue
+                    except requests.exceptions.RequestException as e:
+                        logger.error(f"Could not get plugin status from hub for '{plugin_name}': {e}. Assuming enabled.")
+                        # Continue loading if hub is unreachable or error, so plugin can still function.
+
+                    entry_point = manifest.get('entry_point')
+                    if not entry_point or ':' not in entry_point:
+                        logger.warning(f"Plugin '{plugin_name}' manifest.json is missing or has an invalid 'entry_point'. Skipping.")
+                        continue
+                    
+                    # NEW: Auto-install requirements conditionally
+                    plugin_req_path = plugin_path / "requirements.txt"
+                    if plugin_req_path.is_file():
+                        try:
+                            # Query hub for auto-install deps preference
+                            auto_install_status_response = requests.get(urljoin(hub_url, "/api/settings/auto_install_deps"))
+                            auto_install_status_response.raise_for_status()
+                            auto_install_enabled = auto_install_status_response.json().get("status", False) # Default to False if hub is unreachable
+                            
+                            if auto_install_enabled:
+                                logger.info(f"Plugin '{plugin_name}' has requirements.txt. Auto-installing dependencies...")
+                                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(plugin_req_path)])
+                                logger.info(f"Successfully installed dependencies for plugin '{plugin_name}'.")
+                            else:
+                                logger.warning(f"Plugin '{plugin_name}' has a 'requirements.txt' file at '{plugin_req_path}', but auto-install is disabled. Please ensure these dependencies are installed manually (e.g., `pip install -r {plugin_req_path}`).")
+
+                        except requests.exceptions.RequestException as e:
+                            logger.error(f"Could not get auto-install deps status from hub: {e}. Skipping auto-install for plugin '{plugin_name}'.")
+                        except subprocess.CalledProcessError as e:
+                            logger.error(f"Failed to install dependencies for plugin '{plugin_name}'. Error: {e}. Skipping plugin.")
+                            continue
+                        except Exception as e:
+                            logger.error(f"An unexpected error occurred during dependency installation for '{plugin_name}': {e}. Skipping plugin.")
+                            continue
+
+
+                    module_name, func_name = entry_point.split(':', 1)
+                    
+                    module_file_path = plugin_path / f"{module_name.replace('.', os.sep)}.py"
+                    if not module_file_path.is_file():
+                        logger.warning(f"Plugin '{plugin_name}' entry point module '{module_name}.py' not found at '{module_file_path}'. Skipping.")
+                        continue
+
+                    full_module_name = f"plugins.{plugin_path.name}.{module_name}"
+                    spec = importlib.util.spec_from_file_location(full_module_name, module_file_path)
+                    if spec is None:
+                        logger.warning(f"Could not find spec for plugin module: {full_module_name}. Skipping.")
+                        continue
+                    
+                    plugin_module = importlib.util.module_from_spec(spec)
+                    sys.modules[full_module_name] = plugin_module
+                    spec.loader.exec_module(plugin_module)
+                    
+                    get_tools_func = getattr(plugin_module, func_name, None)
+                    if get_tools_func and callable(get_tools_func):
+                        loaded_tools = get_tools_func()
+                        # Use duck-typing check: verify tools have 'name', 'description', and 'run' attributes
+                        # This avoids isinstance failures when BaseTool is loaded from different module paths via importlib
+                        if isinstance(loaded_tools, list) and all(
+                            hasattr(tool, 'name') and hasattr(tool, 'description') and hasattr(tool, 'run') and callable(tool.run)
+                            for tool in loaded_tools
+                        ):
+                            loaded_plugins_data.append((plugin_name, manifest, loaded_tools))
+                            logger.info(f"Successfully loaded plugin: {plugin_name} (Tools: {[t.name for t in loaded_tools]})")
+                        else:
+                            logger.warning(f"Plugin '{plugin_name}' entry point '{func_name}' did not return a list of BaseTool instances. Skipping.")
+                    else:
+                        logger.warning(f"Plugin '{plugin_name}' entry point '{func_name}' not found or not callable. Skipping.")
+
+                except json.JSONDecodeError:
+                    logger.error(f"Invalid manifest.json in plugin '{plugin_path.name}'. Skipping.")
+                except Exception as e:
+                    logger.error(f"Error loading plugin '{plugin_path.name}': {e}", exc_info=True)
+                    
+    return loaded_plugins_data
+
+
 class Agent:
     def __init__(self, name: str = "LocalAgent", hub_url: str = None, port: int = 5001, connector: Any = None,
                  is_proactive: bool = False, execution_mode: str = "safe", batch_experience: bool = False,
-                 proactive_interval: int = 600, initial_goal: str = None):
+                 proactive_interval: int = 600, initial_goal: str = None, shutdown_event: threading.Event = None):
         
         self.agent_name = name
-        self.hub_url = hub_url or os.environ.get("HUB_URL", "http://127.0.0.1:5000")
-        self.port = port
-        self.connector = connector
-        self.is_proactive = is_proactive
-        self.execution_mode = execution_mode
-        self.batch_experience = batch_experience
-        self.proactive_interval = proactive_interval
-        self.initial_goal = initial_goal
 
         # Reconfigure logging for this specific agent instance
         log_file_path = os.path.join(os.path.dirname(__file__), "..", f"agent_{self.agent_name}_debug.log")
@@ -66,11 +168,21 @@ class Agent:
         if self.logger.hasHandlers():
             self.logger.handlers.clear()
         self.logger.setLevel(logging.DEBUG)
-        handler = logging.FileHandler(log_file_path)
+        handler = logging.FileHandler(log_file_path, mode='w') # Overwrite log file each time
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] [%(filename)s:%(lineno)d] %(message)s", datefmt="[%X]")
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
         self.logger.info(f"Logger initialized for agent {self.agent_name} logging to {log_file_path}")
+
+        self.hub_url = hub_url or os.environ.get("HUB_URL", "http://127.0.0.1:5000")
+        self.port = port
+        self.connector = connector
+        self.is_proactive = is_proactive
+        self.execution_mode = execution_mode
+        self.batch_experience = batch_experience
+        self.proactive_interval = proactive_interval
+        self.initial_goal = initial_goal
+        self.logger.debug(f"Initial goal for agent {self.agent_name}: {self.initial_goal if self.initial_goal else 'No initial goal set.'}")
 
         self.last_proactive_check = time.time()
         self.last_heartbeat_sent = time.time()
@@ -82,19 +194,25 @@ class Agent:
 
         # Determine base model, with fallback
         self.base_model = os.environ.get("DEFAULT_LLM_MODEL", "google/gemini-pro") # Default LLM for planning if none specified
-
-        # Initialize tools
-        self.tools = self._initialize_tools()
+        
+        # New: Store loaded plugin manifests
+        self.plugin_manifests: Dict[str, Dict[str, Any]] = {}
 
         self.planner = Planner(
             agent_name=self.agent_name,
             base_model=self.base_model,
             memory=self.memory,
-            tools=self.tools, # Pass all available tools to the planner
+            tools={}, # Temporarily empty; tools will be fully populated by _initialize_tools
             llm_provider_settings=self.llm_provider_settings
         )
+
+        # Initialize tools
+        self.tools = self._initialize_tools()
+        # Update planner's tools after they are all initialized
+        self.planner.update_tools(self.tools)
+
         self.executor = Executor(self.tools)
-        self.critic = Critic(self.base_model) # Critic also needs base_model
+        self.critic = Critic(self.planner, self.memory) # Critic also needs base_model and memory
 
         self.logger.info(f"Agent {self.agent_name} initialized. Proactive: {self.is_proactive}, Execution Mode: {self.execution_mode}, Batch Experience: {self.batch_experience}, Proactive Interval: {self.proactive_interval}s")
 
@@ -111,7 +229,7 @@ class Agent:
             SendUserMessageTool(),
             SendAgentMessageTool(),
             FinishTaskTool(),
-            LLMCallTool()
+            LLMCallTool(self.planner) # Pass the planner instance here
         ]
 
         # Add conditional tools based on environment variables and credentials
@@ -154,6 +272,12 @@ class Agent:
             ])
         else:
             self.logger.info("Image tools not enabled.")
+        
+        # Load tools from plugins
+        loaded_plugins_data = _load_plugins(self.agent_name, self.hub_url)
+        for plugin_name, manifest, plugin_tool_list in loaded_plugins_data:
+            self.plugin_manifests[plugin_name] = manifest # Store manifest
+            tools.extend(plugin_tool_list)
 
         return tools
 
@@ -178,22 +302,42 @@ class Agent:
 
     def send_heartbeat(self):
         try:
-            response = requests.post(urljoin(self.hub_url, f"/api/heartbeat/{self.agent_name}"))
+            self.logger.info(f"Attempting to send heartbeat for agent {self.agent_name} to hub at {self.hub_url}...")
+            # Include loaded plugin manifests and currently active plugin names in heartbeat
+            active_plugin_names = list(self.plugin_manifests.keys()) # All plugins loaded by the agent
+            
+            payload = {
+                "name": self.agent_name,
+                "url": f"http://localhost:{os.environ.get('AGENT_PORT', '5001')}", # Agent's own URL (conceptual)
+                "plugins": {
+                    "manifests": self.plugin_manifests,
+                    "active_names": active_plugin_names # For now, all loaded are active. Hub will determine global status.
+                }
+            }
+            # NEW: Add available Ollama models to the heartbeat payload
+            if hasattr(self, 'planner') and self.planner and hasattr(self.planner, 'available_ollama_models'):
+                payload['ollama_models'] = [model.model_dump().get('name') for model in self.planner.available_ollama_models if model.model_dump().get('name')]
+
+            response = requests.post(urljoin(self.hub_url, f"/api/heartbeat/{self.agent_name}"), json=payload)
             response.raise_for_status()
+            self.logger.info(f"Heartbeat successfully sent for agent {self.agent_name}.")
         except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error sending heartbeat: {e}")
+            self.logger.error(f"Error sending heartbeat for agent {self.agent_name}: {e}", exc_info=True)
+            # sys.exit(1) # Temporarily removed to allow further logging
 
     def _process_single_message(self, message: Dict[str, Any]):
-        self.logger.info(f"Agent {self.agent_name} received message: {message['content']}")
-        task = message["content"]
-        self.memory.add_experience(
-            agent_name=self.agent_name,
-            task=task,
-            step={"tool": "receive_message", "args": {"message": message["content"]}},
-            step_result={"status": "success", "output": "Message received."},
-            reflection={"feedback": "N/A", "distilled_tips": []},
-            token_usage={"provider": "none", "prompt_tokens": 0, "completion_tokens": 0} # No tokens used for receiving message
-        )
+        self.logger.info(f"Agent {self.agent_name} processing message: {message}") # Added debug line
+        self.logger.info(f"Agent {self.agent_name} received message: {message['message']}")
+        task = message["message"]
+        experience_data = {
+            "agent_name": self.agent_name,
+            "task": task,
+            "step": {"tool": "receive_message", "args": {"message": message["message"]}},
+            "step_result": {"status": "success", "output": "Message received."},
+            "reflection": {"feedback": "N/A", "distilled_tips": []},
+            "token_usage": {"provider": "none", "prompt_tokens": 0, "completion_tokens": 0}
+        }
+        self.memory.add_experience(experience_data)
         self._process_task_with_replanning(task)
 
     def _process_task_with_replanning(self, task: str):
@@ -221,7 +365,14 @@ class Agent:
                 self.logger.warning(f"Agent {self.agent_name} failed to create a valid plan. Raw response: {current_plan}")
                 feedback = f"Failed to create a valid plan after {plan_attempts + 1} attempts. LLM response: {plan_response.get('content', str(current_plan))}"
                 reflection_response = self.planner.reflect(task, experiences + [{"status": "failed", "feedback": feedback}])
-                self.memory.add_experience(self.agent_name, task, {"tool": "planner", "args": {"task": task}}, {"status": "failed", "output": feedback}, reflection_response["reflection"], reflection_response["token_usage"])
+                self.memory.add_experience({
+                    "agent_name": self.agent_name,
+                    "task": task,
+                    "step": {"tool": "planner", "args": {"task": task}},
+                    "step_result": {"status": "failed", "output": feedback},
+                    "reflection": reflection_response["reflection"],
+                    "token_usage": reflection_response["token_usage"]
+                })
                 return # Give up on this task
 
             step_results = []
@@ -287,9 +438,32 @@ class Agent:
                     "step": step,
                     "step_result": {"status": status, "output": str(tool_output) if tool_output else message},
                     "reflection": {"feedback": "N/A", "distilled_tips": []}, # Reflection will be added later
-                    "token_usage": token_usage_step # Placeholder for tool-specific token usage if applicable
+                    "token_usage": token_usage_step, # Placeholder for tool-specific token usage if applicable
+                    "timestamp": time.time()
                 }
                 experiences.append(experience_entry) # Add to current experiences for replanning/reflection
+
+            # Auto-send the final tool result to the user if no send_user_message step was in the plan
+            plan_tool_names = [s.get("tool") for s in current_plan]
+            if "send_user_message" not in plan_tool_names and step_results:
+                # Find the last successful tool output
+                last_output = None
+                for sr in reversed(step_results):
+                    if sr["status"] == "success" and sr["tool_output"]:
+                        output = sr["tool_output"]
+                        if isinstance(output, dict):
+                            last_output = output.get("output", str(output))
+                        else:
+                            last_output = str(output)
+                        break
+                if last_output and last_output != "No tool used, reasoning step.":
+                    self.logger.info(f"Auto-sending result to user: {last_output}")
+                    send_tool = self.planner.tools.get("send_user_message")
+                    if send_tool:
+                        try:
+                            send_tool.run(message=last_output, agent_name=self.agent_name, title=f"Result: {task[:50]}")
+                        except Exception as e:
+                            self.logger.error(f"Error auto-sending result to user: {e}")
 
             # After all steps in a plan attempt, reflect
             self.logger.info(f"Agent {self.agent_name} reflecting on task: {task}")
@@ -307,7 +481,7 @@ class Agent:
                 if exp["reflection"]["feedback"] == "N/A": # Only update if not already reflected
                     exp["reflection"] = reflection
                 exp["token_usage"] = total_task_token_usage # Assign aggregated token usage to all experiences from this task
-                self.memory.add_experience(**exp) # Add to agent's memory
+                self.memory.add_experience(exp) # Add to agent's memory
                 self._submit_experience_to_hub(exp)
 
             # Check if task is complete, or if replanning is needed
@@ -326,6 +500,7 @@ class Agent:
 
     def _request_approval(self, tool_name: str, tool_args: Dict[str, Any]) -> str:
         """Requests user approval from the hub for a sensitive tool."""
+        APPROVAL_TIMEOUT = 300  # 5 minutes max wait
         try:
             response = requests.post(
                 urljoin(self.hub_url, "/api/request_approval"),
@@ -335,8 +510,9 @@ class Agent:
             request_id = response.json().get("request_id")
             self.logger.info(f"Approval requested for {tool_name} with ID: {request_id}")
 
-            # Poll the hub for approval status
-            while True:
+            # Poll the hub for approval status with timeout
+            start_time = time.time()
+            while time.time() - start_time < APPROVAL_TIMEOUT:
                 time.sleep(5) # Poll every 5 seconds
                 check_response = requests.get(urljoin(self.hub_url, f"/api/check_approval/{request_id}"))
                 check_response.raise_for_status()
@@ -344,6 +520,9 @@ class Agent:
                 if status in ["approved", "denied"]:
                     self.logger.info(f"Approval request {request_id} status: {status}")
                     return status
+
+            self.logger.warning(f"Approval request {request_id} timed out after {APPROVAL_TIMEOUT}s.")
+            return "denied"
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Error requesting or checking approval: {e}")
             return "denied" # Default to denial on error
@@ -379,54 +558,31 @@ class Agent:
             self.logger.error(f"Error fetching messages for agent {self.agent_name}: {e}")
             return []
 
-    def run(self):
-        self._register_with_hub()
-        self.send_heartbeat() # Initial heartbeat
-
-        while True:
-            try:
-                # Send heartbeat periodically
-                if time.time() - self.last_heartbeat_sent >= 30: # Every 30 seconds
-                    self.send_heartbeat()
-                    self.last_heartbeat_sent = time.time()
-
-                messages = self._fetch_agent_messages()
-                if messages:
-                    processed_count = 0
-                    for message in messages:
-                        self._process_single_message(message)
-                        processed_count += 1
-                        if processed_count >= self.MAX_MESSAGE_BATCH:
-                            break # Process a max batch of messages per cycle
-                    self._flush_experience_buffer() # Flush after processing messages
-
-                if self.is_proactive and (time.time() - self.last_proactive_check >= self.proactive_interval):
-                    self.last_proactive_check = time.time()
-                    self.logger.info(f"Agent {self.agent_name} performing proactive tasks.")
-                    self._distill_user_insights_from_memories()
-                    self._generate_proactive_tasks_from_insights()
-                    self._flush_experience_buffer() # Flush after proactive tasks
-
-            except requests.exceptions.ConnectionError:
-                self.logger.error("Connection to hub lost. Retrying in 5 seconds...")
-                time.sleep(5)
-            except Exception as e:
-                self.logger.error(f"Agent {self.agent_name} encountered an unexpected error: {e}", exc_info=True)
-                time.sleep(5) # Prevent tight loop on error
-
-            time.sleep(1) # Short delay to prevent busy-waiting
-
     def _register_with_hub(self):
         try:
+            
+            # --- Diagnostic: Test basic connectivity to hub ---
+            try:
+                self.logger.info(f"Diagnostic: Pinging hub at {self.hub_url}...")
+                diag_response = requests.get(self.hub_url, timeout=3)
+                diag_response.raise_for_status()
+                self.logger.info(f"Diagnostic: Ping to hub successful. Status code: {diag_response.status_code}")
+            except Exception as diag_e:
+                self.logger.error(f"Diagnostic: Ping to hub FAILED: {diag_e}", exc_info=True)
+                # Do not exit here, continue to try registration, as it might be a specific endpoint issue.
+            # --- End Diagnostic ---
+
+            self.logger.info(f"Attempting to register agent {self.agent_name} with hub at {self.hub_url}...")
             response = requests.post(
                 urljoin(self.hub_url, "/register_agent"),
-                json={"name": self.agent_name, "url": f"http://localhost:{os.environ.get('AGENT_PORT', '5001')}"} # Agent's own URL (conceptual)
+                json={"name": self.agent_name, "url": f"http://localhost:{os.environ.get('AGENT_PORT', '5001')}"},
+                timeout=5 # Add a 5-second timeout
             )
             response.raise_for_status()
             self.logger.info(f"Agent {self.agent_name} successfully registered with hub.")
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Error registering agent {self.agent_name} with hub: {e}")
-            sys.exit(1) # Exit if cannot register with hub
+        except Exception as e: # Broaden exception to catch any error
+            self.logger.error(f"Critical error during agent registration: {e}", exc_info=True)
+            # sys.exit(1) # Temporarily removed to allow further logging
 
     def _distill_user_insights_from_memories(self):
         self.logger.info(f"Agent {self.agent_name} distilling user insights from memories.")
@@ -489,7 +645,7 @@ class Agent:
         Generate a list of highly relevant, actionable, and proactive tasks that the agent could undertake
         to better serve the user or address their implicit needs.
         Tasks should be concise and direct.
-        Format your tasks as a JSON array of strings.
+        Format your tasks as a JSON array of strings, where each string is a concise insight.
         Example:
         ["Monitor project management tool for new deadlines.", "Draft a report template for sales data."]
         """
@@ -520,3 +676,43 @@ class Agent:
                 total_task_token_usage[provider] = {"prompt_tokens": 0, "completion_tokens": 0}
             total_task_token_usage[provider]["prompt_tokens"] += new_token_usage.get("prompt_tokens", 0)
             total_task_token_usage[provider]["completion_tokens"] += new_token_usage.get("completion_tokens", 0)
+
+    def run(self, shutdown_event: threading.Event):
+        self.logger.info(f"Agent {self.agent_name} starting.")
+        self._register_with_hub()
+
+        # Process initial goal if one was provided at launch
+        if self.initial_goal:
+            self.logger.info(f"Agent {self.agent_name} processing initial goal: {self.initial_goal}")
+            self._process_single_message({"sender": "user", "message": self.initial_goal})
+            self._flush_experience_buffer()
+
+        while not shutdown_event.is_set():
+            current_time = time.time()
+
+            # Send heartbeat periodically
+            if current_time - self.last_heartbeat_sent >= 10: # Send heartbeat every 10 seconds
+                self.send_heartbeat()
+                self.last_heartbeat_sent = current_time
+
+            # Fetch and process messages from the hub
+            messages = self._fetch_agent_messages()
+            if messages:
+                self.logger.info(f"Agent {self.agent_name} fetched {len(messages)} messages.")
+                for message in messages[:self.MAX_MESSAGE_BATCH]: # Process in batches
+                    self._process_single_message(message)
+                self._flush_experience_buffer() # Flush buffer after processing messages
+
+            # Proactive loop if enabled
+            if self.is_proactive and (current_time - self.last_proactive_check >= self.proactive_interval):
+                self.logger.info(f"Agent {self.agent_name} performing proactive tasks.")
+                self._distill_user_insights_from_memories()
+                self._generate_proactive_tasks_from_insights()
+                self.last_proactive_check = current_time
+
+            time.sleep(1) # Sleep for a short interval to prevent busy-waiting
+
+        self.logger.info(f"Agent {self.agent_name} shutting down.")
+        # Any cleanup needed before shutdown
+        self._flush_experience_buffer()
+        # Deregister from hub (optional, could be handled by main_agent_entrypoint or hub)

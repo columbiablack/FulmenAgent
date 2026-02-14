@@ -1,0 +1,7 @@
+{
+  "name": "My Weather Plugin",
+  "version": "1.0.0",
+  "description": "Adds a tool to get the current weather.",
+  "author": "Plugin Developer",
+  "entry_point": "tools:get_tools"
+}

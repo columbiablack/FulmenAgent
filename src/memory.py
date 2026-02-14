@@ -1,8 +1,7 @@
 from typing import Any, List, Dict
 import os
-import json # ADDED
+import json
 import time
-from typing import Any, List, Dict
 import logging
 # Conditional import for voyageai
 try:
@@ -22,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 
 class Memory:
-    def __init__(self):
+    def __init__(self, agent_name: str):
+        self.agent_name = agent_name
         self.experiences = []
         self.goals: List[Dict[str, Any]] = [] # Change to list of dicts
         self.knowledge = {}
@@ -61,7 +61,7 @@ class Memory:
 
                 self.chroma_client = chromadb.Client() # In-memory client
                 self.chroma_collection = self.chroma_client.get_or_create_collection(
-                    name="agent_memories",
+                    name=f"agent_memories_{self.agent_name}", # Agent-specific collection name
                     embedding_function=VoyageAIEmbeddingFunction(self.voyageai_client, self.voyage_embedding_model)
                 )
                 logger.info("ChromaDB client and collection initialized for Voyage AI embeddings.")

@@ -11,6 +11,7 @@ from rich.text import Text
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_network.src.planner import Planner
+from agent_network.src.memory import Memory
 
 # Configure logging for the script
 # We'll use rich's console for output, so disable default logging to stdout
@@ -53,13 +54,20 @@ def configure_agent_cli():
     os.environ["OPENROUTER_API_KEY"] = api_key
 
     # 3. Select OpenRouter Model
-    planner = Planner()
+    config_memory = Memory(agent_name="config_wizard")
+    planner = Planner(
+        agent_name="config_wizard",
+        base_model="",
+        memory=config_memory,
+        tools=[],
+        llm_provider_settings={"ENABLE_OPENROUTER": "yes", "ENABLE_OLLAMA": "no", "ENABLE_MOONSHOT_AI": "no", "ENABLE_VOYAGE_AI": "no"}
+    )
     if not api_key:
         console.print("[bold yellow]OpenRouter API Key not provided. Skipping model selection.[/bold yellow]")
         set_key(DOTENV_PATH, "OPENROUTER_MODEL", "")
     else:
         console.print("[bold blue]Fetching available free models from OpenRouter...[/bold blue]")
-        free_models = planner.get_available_models(free_only=True)
+        free_models = planner._get_available_openrouter_models(free_only=True)
 
         if not free_models:
             console.print("[bold yellow]No free models found or an error occurred. You can manually set OPENROUTER_MODEL later.[/bold yellow]")
@@ -69,16 +77,16 @@ def configure_agent_cli():
                 Text("Available Free OpenRouter Models", justify="center", style="bold underline blue"),
                 border_style="blue"
             ))
-            for i, model in enumerate(free_models):
-                console.print(f"[magenta]{i+1}.[/magenta] ID: [bold]{model['id']}[/bold], Name: {model['name']}")
-            
+            for i, model_id in enumerate(free_models):
+                console.print(f"[magenta]{i+1}.[/magenta] [bold]{model_id}[/bold]")
+
             selected_model_id = None
             while selected_model_id is None:
                 try:
                     choice = get_user_input_rich("[bold cyan]Enter the number of the model you want to use[/bold cyan]")
                     choice_index = int(choice) - 1
                     if 0 <= choice_index < len(free_models):
-                        selected_model_id = free_models[choice_index]['id']
+                        selected_model_id = free_models[choice_index]
                     else:
                         console.print("[bold red]Invalid choice. Please enter a number from the list.[/bold red]")
                 except ValueError:
@@ -116,7 +124,7 @@ def configure_agent_cli():
     use_kimi = Prompt.ask("[bold cyan]Do you want to configure Moonshot AI (Kimi) models?[/bold cyan]", choices=["yes", "no"], default="no", console=console).lower() == "yes"
     if use_kimi:
         current_moonshot_api_key = os.getenv("MOONSHOT_API_KEY", "")
-        moonshot_api_key = get_user_input_rich(f"[bold cyan]Enter your Moonshot AI API Key (sk-...)[/bold cyan]", current_moonshot_api_key, password=True)
+        moonshot_api_key = Prompt.ask(f"[bold cyan]Enter your Moonshot AI API Key (sk-...)[/bold cyan]", default=current_moonshot_api_key, password=True, console=console)
         set_key(DOTENV_PATH, "MOONSHOT_API_KEY", moonshot_api_key)
         console.print("[green]Moonshot AI API Key saved.[/green]")
 
@@ -124,7 +132,13 @@ def configure_agent_cli():
         os.environ["MOONSHOT_API_KEY"] = moonshot_api_key
 
         # 4. Select Kimi Model
-        planner = Planner() # Re-initialize planner to pick up Moonshot API key
+        planner = Planner(
+            agent_name="config_wizard",
+            base_model="",
+            memory=config_memory,
+            tools=[],
+            llm_provider_settings={"ENABLE_OPENROUTER": "no", "ENABLE_OLLAMA": "no", "ENABLE_MOONSHOT_AI": "yes", "ENABLE_VOYAGE_AI": "no"}
+        )
         if not moonshot_api_key:
             console.print("[bold yellow]Moonshot AI API Key not provided. Skipping model selection.[/bold yellow]")
             set_key(DOTENV_PATH, "MOONSHOT_MODEL", "")

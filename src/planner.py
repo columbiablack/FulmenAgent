@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from src.memory import Memory
+from agent_network.src.memory import Memory
 import os
 import json
 import logging
@@ -34,6 +34,19 @@ class Planner:
         self.moonshot_client = None # Placeholder for Moonshot OpenAI client
         self.available_moonshot_models = [] # To store a list of available Kimi models (not actively fetched but for consistency)
 
+        # Initialize LLM providers
+        self._initialize_llm_providers()
+
+    def update_tools(self, new_tools: List[Any]):
+        """
+        Updates the planner's internal tools dictionary.
+        This is called after initial tools and plugin tools are loaded.
+        """
+        self.tools = {tool.name: tool for tool in new_tools}
+        self.logger.debug(f"Planner tools updated. Available tools: {list(self.tools.keys())}")
+
+    def _initialize_llm_providers(self):
+        """Initializes LLM provider clients (OpenRouter, Ollama, Moonshot)."""
         # Log initial LLM provider status
         self.logger.info(f"DEBUG: Planner initialized. "
                          f"OPENROUTER_API_KEY: {'SET' if self.openrouter_api_key else 'NOT SET'}. "
@@ -51,7 +64,7 @@ class Planner:
             else:
                 self.logger.info(f"Found {len(self.free_models)} free OpenRouter models.")
         elif self.llm_provider_settings.get("ENABLE_OPENROUTER") == "yes" and not self.openrouter_api_key:
-             self.logger.warning("OPENROUTER_API_KEY not set, OpenRouter will not be used.")
+            self.logger.warning("OPENROUTER_API_KEY not set, OpenRouter will not be used.")
 
         # Initialize Ollama client and models if enabled
         if self.llm_provider_settings.get("ENABLE_OLLAMA") == "yes" and self.ollama_base_url:
@@ -65,8 +78,9 @@ class Planner:
                     self.logger.info(f"Found {len(self.available_ollama_models)} models on Ollama server at {self.ollama_base_url}.")
                     if not self.ollama_model and self.available_ollama_models:
                         # If no specific Ollama model is chosen, default to the first one available
-                        self.ollama_model = self.available_ollama_models[0]['name']
+                        self.ollama_model = self.available_ollama_models[0].model_dump().get('name')
                         self.logger.info(f"No specific OLLAMA_MODEL set. Defaulting to first available: {self.ollama_model}")
+                    self.logger.info(f"Ollama model selected: {self.ollama_model}")
             except Exception as e:
                 self.logger.error(f"Error initializing Ollama client at {self.ollama_base_url}: {e}")
                 self.ollama_client = None
@@ -143,15 +157,24 @@ class Planner:
                     self.logger.warning(f"No Ollama model specified for _call_llm.")
                     return {"content": "Error: No Ollama model specified.", "token_usage": token_usage}
 
-                response = self.ollama_client.chat( # Use self.ollama_client
-                    model=used_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    options={"temperature": temperature}
-                )
+                self.logger.debug(f"Calling Ollama chat with model: {used_model}, prompt: {prompt[:200]}...") # New debug log
+                
+                try:
+                    ollama_response = self.ollama_client.chat( # Use self.ollama_client
+                        model=used_model,
+                        messages=[{"role": "user", "content": prompt}],
+                        format="json",  # Force Ollama to output valid JSON
+                        options={"temperature": temperature}
+                    )
+                    self.logger.debug(f"Received raw Ollama response: {ollama_response}") # Log raw response
+                except Exception as ollama_e:
+                    self.logger.error(f"Error during ollama_client.chat call: {ollama_e}")
+                    return {"content": f"Error communicating with Ollama: {ollama_e}", "token_usage": token_usage}
+
                 # Ollama's API response doesn't directly provide token usage like OpenAI's.
                 # You might need to estimate or implement a tokenizer if precise tracking is needed.
                 # For now, we'll return 0 tokens for Ollama.
-                return {"content": response["message"]["content"], "token_usage": token_usage}
+                return {"content": ollama_response["message"]["content"], "token_usage": token_usage}
 
             elif provider == "moonshot" and self.llm_provider_settings.get("ENABLE_MOONSHOT_AI") == "yes" and self.moonshot_client:
                 used_model = model if model else (self.moonshot_model or self.base_model) # Use agent's base_model as ultimate fallback
@@ -193,6 +216,7 @@ class Planner:
                 self.logger.warning("No LLM provider is enabled for evaluation.")
                 return {"content": "No LLM provider enabled.", "token_usage": {"provider": "none", "prompt_tokens": 0, "completion_tokens": 0}}
         
+        self.logger.debug(f"Calling _call_llm from evaluate_prompt with provider: {provider}, prompt: {prompt[:100]}...") # NEW DEBUG
         response = self._call_llm(prompt, temperature=0.5, provider=provider)
         return response # Returns {"content": ..., "token_usage": {...}}
 
@@ -223,38 +247,35 @@ class Planner:
         else:
             self.logger.info("Voyage AI is not enabled for memory retrieval.")
 
+        self.logger.debug(f"Relevant memories before joining: {relevant_memories}") # NEW DEBUG
+
         memories_str = "\n".join(relevant_memories) if relevant_memories else "No relevant memories found."
         
-        prompt = f"""
-        You are an AI agent designed to create a plan to accomplish a given task.
-        You have access to the following tools: {list(self.tools.keys())}.
+        self.logger.debug(f"Available tools for planning: {list(self.tools.keys())}") # NEW DEBUG
+
+        # Build tool descriptions so the LLM knows what each tool does and how to call it
+        tool_descriptions = "\n".join([f"  - {tool.name}: {tool.description}" for tool in self.tools.values()])
+
+        prompt = f"""You are an AI agent. Create a simple plan for this task.
+
+TASK: {task}
+
+Available tools:
+{tool_descriptions}
+
+RULES:
+- Create only 1 step for simple tasks.
+- For weather tasks, use "weather_tool" with the EXACT location from the task.
+- Respond with ONLY a JSON object.
+
+Example response:
+{{
+    "plan": [
+        {{"goal": "Get current temperature for {task}", "tool": "weather_tool", "args": {{"action": {{"type": "current_temp", "location": "{task}"}}}}}}
+    ]
+}}"""
         
-        Here is the task you need to accomplish:
-        TASK: {task}
-        
-        Here are some relevant memories from your past experiences:
-        {memories_str}
-        
-        Based on the task and your memories, outline a detailed plan. 
-        The plan should consist of a series of steps. For each step, clearly state:
-        1. The goal of the step.
-        2. The tool you intend to use (from the provided list).
-        3. The arguments for the tool.
-        
-        Your response should be a JSON object with a single key "plan", 
-        which is a list of step objects. Each step object should have "goal", "tool", and "args" keys.
-        Example:
-        {{
-            "plan": [
-                {{"goal": "Understand the user's request", "tool": "None", "args": {{"query": "user request"}}}},
-                {{"goal": "Search for relevant information", "tool": "search_tool", "args": {{"query": "AI agent best practices"}}}},
-                {{"goal": "Synthesize information and formulate response", "tool": "None", "args": {{"information": "search results"}}}},
-            ]
-        }}
-        If no tools are directly applicable, use "None" for the tool and provide reasoning in the goal.
-        """
-        
-        response = self._call_llm(prompt, temperature=0.7)
+        response = self.evaluate_prompt(prompt)
         plan_content = response["content"]
         
         # Aggregate token usage from the planning LLM call
@@ -266,8 +287,17 @@ class Planner:
             else: # Should not happen if `aggregated_token_usage` is pre-populated
                 aggregated_token_usage[provider] = response["token_usage"]
 
+        # Strip markdown code fences if the LLM wrapped the JSON in them
+        stripped_content = plan_content.strip()
+        if stripped_content.startswith("```"):
+            # Remove opening fence (e.g. ```json or ```)
+            stripped_content = stripped_content.split("\n", 1)[1] if "\n" in stripped_content else stripped_content[3:]
+            # Remove closing fence
+            if stripped_content.endswith("```"):
+                stripped_content = stripped_content[:-3].strip()
+
         try:
-            plan = json.loads(plan_content)
+            plan = json.loads(stripped_content)
             return {"plan": plan["plan"], "token_usage": aggregated_token_usage}
         except json.JSONDecodeError:
             self.logger.error(f"Failed to decode plan JSON: {plan_content}")
@@ -299,7 +329,7 @@ class Planner:
             "distilled_tips": ["Always refine search queries...", "Consider edge cases..."]
         }}
         """
-        response = self._call_llm(prompt, temperature=0.7)
+        response = self.evaluate_prompt(prompt)
         reflection_content = response["content"]
 
         # Aggregate token usage from the reflection LLM call
@@ -311,8 +341,15 @@ class Planner:
             else: # Should not happen if `aggregated_token_usage` is pre-populated
                 aggregated_token_usage[provider] = response["token_usage"]
 
+        # Strip markdown code fences if the LLM wrapped the JSON in them
+        stripped_reflection = reflection_content.strip()
+        if stripped_reflection.startswith("```"):
+            stripped_reflection = stripped_reflection.split("\n", 1)[1] if "\n" in stripped_reflection else stripped_reflection[3:]
+            if stripped_reflection.endswith("```"):
+                stripped_reflection = stripped_reflection[:-3].strip()
+
         try:
-            reflection = json.loads(reflection_content)
+            reflection = json.loads(stripped_reflection)
             return {"reflection": reflection, "token_usage": aggregated_token_usage}
         except json.JSONDecodeError:
             self.logger.error(f"Failed to decode reflection JSON: {reflection_content}")

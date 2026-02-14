@@ -92,7 +92,62 @@
             opacity: 1;
         }
 
-        /* End Tooltip styles */
+        /* Toggle switch styling */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 20px;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+
+        .switch input { 
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            -webkit-transition: .4s;
+            transition: .4s;
+            border-radius: 20px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            -webkit-transition: .4s;
+            transition: .4s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--primary-color);
+        }
+
+        input:focus + .slider {
+            box-shadow: 0 0 1px var(--primary-color);
+        }
+
+        input:checked + .slider:before {
+            -webkit-transform: translateX(14px);
+            -ms-transform: translateX(14px);
+            transform: translateX(14px);
+        }
+        /* End Toggle switch styling */
 
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -114,6 +169,8 @@
         .tab-nav button:hover { background-color: var(--list-item-bg); }
         .tab-nav button.active { background-color: var(--primary-color); color: white; }
         .tab-content { display: none; }
+        .badge { background-color: #e74c3c; color: white; border-radius: 50%; padding: 2px 7px; font-size: 12px; font-weight: bold; margin-left: 5px; animation: badge-pulse 1.5s infinite; }
+        @keyframes badge-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
         
         input[type="text"], input[type="password"], input[type="number"], select, textarea {
             width: 95%; padding: 8px; margin-top: 5px; border: 1px solid var(--section-border); border-radius: 6px; font-size: 1em;
@@ -168,12 +225,14 @@
         <h1>Agent Network Dashboard</h1>
         <p>Last updated: <span id="current-time"></span></p>
         <button id="shutdown-hub-button" class="shutdown-btn">Shutdown Hub</button>
+        <button id="reset-hub-button" class="shutdown-btn" style="background-color: #e67e22;">Reset Hub</button>
         <button id="theme-switcher-button">Toggle Theme</button>
 
         <div class="tab-nav">
             <button class="tab-link active" onclick="openTab(event, 'dashboard-tab')">Dashboard</button>
-            <button class="tab-link" onclick="openTab(event, 'approvals-tab')">Pending Approvals</button>
+            <button class="tab-link" id="approvals-tab-btn" onclick="openTab(event, 'approvals-tab')">Pending Approvals <span id="approval-badge" class="badge" style="display:none;">0</span></button>
             <button class="tab-link" onclick="openTab(event, 'settings-tab')">Admin Settings</button>
+            <button class="tab-link" onclick="openTab(event, 'plugins-tab')">Plugin Management</button>
         </div>
 
         <div id="dashboard-tab" class="tab-content" style="display: block;">
@@ -194,7 +253,7 @@
                             <label for="execution-mode">Execution Mode:<span class="tooltip-icon">?</span></label>
                             <select id="execution-mode" name="execution_mode">
                                 <option value="safe">Safe</option>
-                                <option value="fast">Fast</option>
+                                <option value="unrestricted">Unrestricted</option>
                             </select>
                             <div class="tooltip-text">Controls the safety level for tool execution. 'safe' requires user approval for dangerous tools. 'unrestricted' allows all tools to execute without approval, providing full autonomy.</div>
                         </div>
@@ -250,7 +309,21 @@
                 <form id="config-form" style="display: grid; grid-template-columns: 1fr; gap: 15px;">
                     <h3>OpenRouter Configuration</h3>
                     <div><label for="openrouter-api-key">OpenRouter API Key:</label><input type="password" id="openrouter-api-key" name="OPENROUTER_API_KEY"></div>
-                    <div><label for="openrouter-model">OpenRouter Model:</label><input type="text" id="openrouter-model" name="OPENROUTER_MODEL" placeholder="e.g., nousresearch/hermes-2-theta-llama-3-8b"></div>
+                    <div>
+                        <label for="openrouter-model">OpenRouter Model:</label>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <select id="openrouter-model" name="OPENROUTER_MODEL" style="flex: 1; min-width: 250px; padding: 6px;">
+                                <option value="">-- Loading models... --</option>
+                            </select>
+                            <button type="button" id="refresh-models-btn" onclick="fetchOpenRouterModels()" style="padding: 6px 12px; cursor: pointer;" title="Refresh model list">↻ Refresh</button>
+                        </div>
+                        <div style="margin-top: 6px;">
+                            <label style="font-size: 0.9em; cursor: pointer;">
+                                <input type="checkbox" id="show-paid-models" onchange="fetchOpenRouterModels()"> Show paid models
+                            </label>
+                            <span id="model-count" style="font-size: 0.85em; color: #888; margin-left: 10px;"></span>
+                        </div>
+                    </div>
                     <h3>Ollama Configuration</h3>
                     <div><label for="ollama-base-url">Ollama Base URL:</label><input type="text" id="ollama-base-url" name="OLLAMA_BASE_URL" placeholder="e.g., http://localhost:11434"></div>
                     <div><label for="ollama-model">Ollama Model:</label><input type="text" id="ollama-model" name="OLLAMA_MODEL" placeholder="e.g., llama3:latest"></div>
@@ -385,6 +458,32 @@
                 </form>
             </div>
         </div>
+
+        <div id="plugins-tab" class="tab-content">
+            <div class="section">
+                <h2>Plugin Management</h2>
+                <p>Changes to plugin status require agents to be restarted to take full effect.</p>
+
+                <div style="margin-bottom: 20px;">
+                    <label for="auto-install-deps">Auto-install Plugin Dependencies:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="auto-install-deps" onchange="toggleAutoInstallDeps(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                    <span id="auto-install-status-text">(Currently: Enabled)</span>
+                </div>
+
+                <h3>Upload New Plugin (.zip)</h3>
+                <form id="plugin-upload-form" enctype="multipart/form-data">
+                    <input type="file" name="plugin_zip" accept=".zip" required>
+                    <button type="submit">Upload Plugin</button>
+                </form>
+                <br>
+                <div id="plugins-list">
+                    <p>Loading plugins...</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
@@ -402,10 +501,95 @@
             }
             document.getElementById(tabName).style.display = "block";
             evt.currentTarget.className += " active";
+            // Call specific fetch function when a tab is opened
+            if (tabName === 'plugins-tab') {
+                fetchAndDisplayPlugins();
+                fetchAutoInstallDepsStatus(); // NEW: Fetch auto-install deps status
+            }
+            if (tabName === 'settings-tab') {
+                fetchOpenRouterModels();
+            }
         }
 
         function updateTime() {
             document.getElementById('current-time').textContent = moment().format('YYYY-MM-DD HH:mm:ss');
+        }
+
+        // --- OpenRouter Model Selector ---
+        let _currentOpenRouterModel = '';  // Track the currently configured model
+
+        async function fetchOpenRouterModels() {
+            const select = document.getElementById('openrouter-model');
+            const countSpan = document.getElementById('model-count');
+            const includePaid = document.getElementById('show-paid-models').checked;
+
+            select.innerHTML = '<option value="">-- Loading models... --</option>';
+            countSpan.textContent = '';
+
+            try {
+                const response = await fetch(`/api/openrouter/models?include_paid=${includePaid}`);
+                const result = await response.json();
+
+                if (result.status !== 'success') {
+                    select.innerHTML = `<option value="">-- Error: ${result.message} --</option>`;
+                    return;
+                }
+
+                const models = result.models;
+                select.innerHTML = '';
+
+                // Group models
+                const freeModels = models.filter(m => m.free);
+                const paidModels = models.filter(m => !m.free);
+
+                if (freeModels.length > 0) {
+                    const freeGroup = document.createElement('optgroup');
+                    freeGroup.label = `Free Models (${freeModels.length})`;
+                    freeModels.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        const ctx = m.context_length ? ` [${(m.context_length / 1024).toFixed(0)}K ctx]` : '';
+                        opt.textContent = `${m.name}${ctx}`;
+                        if (m.id === _currentOpenRouterModel) opt.selected = true;
+                        freeGroup.appendChild(opt);
+                    });
+                    select.appendChild(freeGroup);
+                }
+
+                if (paidModels.length > 0) {
+                    const paidGroup = document.createElement('optgroup');
+                    paidGroup.label = `Paid Models (${paidModels.length})`;
+                    paidModels.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        const ctx = m.context_length ? ` [${(m.context_length / 1024).toFixed(0)}K ctx]` : '';
+                        opt.textContent = `${m.name}${ctx}`;
+                        if (m.id === _currentOpenRouterModel) opt.selected = true;
+                        paidGroup.appendChild(opt);
+                    });
+                    select.appendChild(paidGroup);
+                }
+
+                if (models.length === 0) {
+                    select.innerHTML = '<option value="">-- No models available --</option>';
+                }
+
+                const totalFree = freeModels.length;
+                const totalPaid = paidModels.length;
+                countSpan.textContent = includePaid ? `${totalFree} free, ${totalPaid} paid` : `${totalFree} free models`;
+
+                // If current model not in list, add it as a custom option
+                if (_currentOpenRouterModel && !models.find(m => m.id === _currentOpenRouterModel)) {
+                    const customOpt = document.createElement('option');
+                    customOpt.value = _currentOpenRouterModel;
+                    customOpt.textContent = `${_currentOpenRouterModel} (current - custom)`;
+                    customOpt.selected = true;
+                    select.insertBefore(customOpt, select.firstChild);
+                }
+            } catch (error) {
+                console.error('Error fetching OpenRouter models:', error);
+                select.innerHTML = '<option value="">-- Failed to load models --</option>';
+            }
         }
 
         // --- Config/Settings Functions ---
@@ -414,7 +598,8 @@
                 const response = await fetch('/api/config');
                 const config = await response.json();
                 document.getElementById('openrouter-api-key').value = config.OPENROUTER_API_KEY || '';
-                document.getElementById('openrouter-model').value = config.OPENROUTER_MODEL || '';
+                _currentOpenRouterModel = config.OPENROUTER_MODEL || '';
+                fetchOpenRouterModels();  // Load models into dropdown and pre-select current
                 document.getElementById('ollama-base-url').value = config.OLLAMA_BASE_URL || '';
                 document.getElementById('ollama-model').value = config.OLLAMA_MODEL || '';
                 document.getElementById('moonshot-api-key').value = config.MOONSHOT_API_KEY || '';
@@ -479,27 +664,56 @@
         }
         
         // --- Approvals Functions ---
+        let _prevPendingCount = 0;
+
         async function fetchAndDisplayApprovals() {
             try {
                 const response = await fetch('/api/approvals');
                 const approvals = await response.json();
                 const approvalList = document.getElementById('pending-approvals-list');
+                const badge = document.getElementById('approval-badge');
                 approvalList.innerHTML = '';
-                if (Object.keys(approvals).length === 0 || !Object.values(approvals).some(a => a.status === 'pending')) {
+
+                // Count pending approvals
+                const pendingEntries = Object.entries(approvals).filter(([_, a]) => a.status === 'pending');
+                const pendingCount = pendingEntries.length;
+
+                // Update badge
+                if (pendingCount > 0) {
+                    badge.textContent = pendingCount;
+                    badge.style.display = 'inline';
+                    // Flash the tab button if new approvals arrived
+                    if (pendingCount > _prevPendingCount) {
+                        const tabBtn = document.getElementById('approvals-tab-btn');
+                        tabBtn.style.transition = 'none';
+                        tabBtn.style.backgroundColor = '#e74c3c';
+                        tabBtn.style.color = 'white';
+                        setTimeout(() => {
+                            tabBtn.style.transition = '0.5s';
+                            if (!tabBtn.classList.contains('active')) {
+                                tabBtn.style.backgroundColor = '';
+                                tabBtn.style.color = '';
+                            }
+                        }, 2000);
+                    }
+                } else {
+                    badge.style.display = 'none';
+                }
+                _prevPendingCount = pendingCount;
+
+                if (pendingCount === 0) {
                     approvalList.innerHTML = '<li>No pending approvals.</li>';
                 } else {
-                    for (const [id, details] of Object.entries(approvals)) {
-                        if (details.status === 'pending') {
-                            const li = document.createElement('li');
-                            li.innerHTML = `
-                                <strong>Agent:</strong> ${details.agent_name}<br>
-                                <strong>Tool:</strong> ${details.tool_name}<br>
-                                <strong>Arguments:</strong> <pre>${JSON.stringify(details.tool_args, null, 2)}</pre>
-                                <button class="approve-btn" data-id="${id}">Approve</button>
-                                <button class="deny-btn" data-id="${id}">Deny</button>
-                            `;
-                            approvalList.appendChild(li);
-                        }
+                    for (const [id, details] of pendingEntries) {
+                        const li = document.createElement('li');
+                        li.innerHTML = `
+                            <strong>Agent:</strong> ${details.agent_name}<br>
+                            <strong>Tool:</strong> ${details.tool_name}<br>
+                            <strong>Arguments:</strong> <pre>${JSON.stringify(details.tool_args, null, 2)}</pre>
+                            <button class="approve-btn" data-id="${id}">Approve</button>
+                            <button class="deny-btn" data-id="${id}">Deny</button>
+                        `;
+                        approvalList.appendChild(li);
                     }
                     document.querySelectorAll('.approve-btn').forEach(btn => btn.addEventListener('click', () => handleApproval(btn.dataset.id, 'approved')));
                     document.querySelectorAll('.deny-btn').forEach(btn => btn.addEventListener('click', () => handleApproval(btn.dataset.id, 'denied')));
@@ -568,6 +782,16 @@
                                 <button type="submit">Send</button>
                             </form>
                         `;
+
+                        // NEW: Display Ollama models if available
+                        if (details.ollama_models && details.ollama_models.length > 0) {
+                            const ollamaModelsHtml = `
+                                <span><strong>Ollama Models:</strong> ${details.ollama_models.join(', ')}</span><br>
+                            `;
+                            // Insert before the form, or inside the agent-status div
+                            li.querySelector('.agent-status > div').insertAdjacentHTML('beforeend', ollamaModelsHtml);
+                        }
+
                         agentList.appendChild(li);
                     }
                     document.querySelectorAll('.shutdown-agent-button').forEach(button => {
@@ -605,7 +829,7 @@
         }
         
         async function handleSendMessageToAgent(event) {
-            event.preventDefault(); 
+            event.preventDefault();
             const agentName = event.target.dataset.agentName;
             const messageInput = event.target.querySelector('input[name="message"]');
             const message = messageInput.value;
@@ -623,7 +847,7 @@
                 });
                 const data = await response.json();
                 alert(data.message);
-                if (result.status === 'success') {
+                if (data.status === 'success') {
                     messageInput.value = '';
                 }
             } catch (error) {
@@ -631,7 +855,7 @@
                 alert(`Failed to send message to agent "${agentName}".`);
             }
         }
-        
+
         // --- Experience Display Functions ---
         async function fetchAndDisplayExperiences() {
             try {
@@ -697,7 +921,7 @@
                 const response = await fetch('/api/token_usage');
                 const tokenUsage = await response.json();
                 const displayDiv = document.getElementById('token-usage-display');
-                
+
                 let html = '<table><thead><tr><th>Provider</th><th>Prompt Tokens</th><th>Completion Tokens</th><th>Total Tokens</th></tr></thead><tbody>';
                 let overallTotalPrompt = 0;
                 let overallTotalCompletion = 0;
@@ -719,6 +943,121 @@
             }
         }
 
+        // --- Plugin Management Functions ---
+        async function fetchAndDisplayPlugins() {
+            try {
+                const response = await fetch('/api/plugins');
+                const plugins = await response.json();
+                const pluginsListDiv = document.getElementById('plugins-list');
+                pluginsListDiv.innerHTML = ''; // Clear previous list
+
+                if (plugins.length === 0) {
+                    pluginsListDiv.innerHTML = '<p>No plugins discovered yet. Launch an agent to discover plugins.</p>';
+                } else {
+                    let html = '<table><thead><tr><th>Plugin Name</th><th>Description</th><th>Version</th><th>Author</th><th>Status</th><th>Actions</th><th>Remove</th></tr></thead><tbody>';
+                    plugins.forEach(plugin => {
+                        const isEnabled = (plugin.status === 'enabled');
+                        html += `
+                            <tr>
+                                <td>${plugin.name}</td>
+                                <td>${plugin.description}</td>
+                                <td>${plugin.version}</td>
+                                <td>${plugin.author}</td>
+                                <td>${plugin.status}</td>
+                                <td>
+                                    <label class="switch">
+                                        <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="togglePluginStatus('${plugin.name}', this.checked)">
+                                        <span class="slider"></span>
+                                    </label>
+                                </td>
+                                <td>
+                                    <button class="deny-btn" onclick="removePlugin('${plugin.name}')">Remove</button>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                    html += '</tbody></table>';
+                    pluginsListDiv.innerHTML = html;
+                }
+            } catch (error) {
+                console.error('Error fetching plugins:', error);
+                document.getElementById('plugins-list').innerHTML = '<p>Error loading plugins.</p>';
+            }
+        }
+
+        async function togglePluginStatus(pluginName, isChecked) {
+            const action = isChecked ? 'enable' : 'disable';
+            try {
+                const response = await fetch(`/api/plugins/toggle/${pluginName}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+                const result = await response.json();
+                alert(result.message);
+                fetchAndDisplayPlugins(); // Refresh list after toggle
+            } catch (error) {
+                console.error('Error toggling plugin status:', error);
+                alert('Failed to toggle plugin status.');
+            }
+        }
+
+        async function removePlugin(pluginName) {
+            if (confirm(`Are you sure you want to remove the plugin "${pluginName}"? This will delete its files.`)) {
+                try {
+                    const response = await fetch(`/api/plugins/remove/${pluginName}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const result = await response.json();
+                    alert(result.message);
+                    if (result.status === 'success') {
+                        fetchAndDisplayPlugins(); // Refresh the plugin list
+                    }
+                } catch (error) {
+                    console.error('Error removing plugin:', error);
+                    alert('Failed to remove plugin.');
+                }
+            }
+        }
+
+        async function fetchAutoInstallDepsStatus() {
+            try {
+                const response = await fetch('/api/settings/auto_install_deps');
+                const data = await response.json();
+                const autoInstallCheckbox = document.getElementById('auto-install-deps');
+                autoInstallCheckbox.checked = data.status;
+                updateAutoInstallDepsStatusText(data.status);
+            } catch (error) {
+                console.error('Error fetching auto-install deps status:', error);
+            }
+        }
+
+        async function toggleAutoInstallDeps(isChecked) {
+            try {
+                const response = await fetch('/api/settings/auto_install_deps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enable: isChecked })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    updateAutoInstallDepsStatusText(isChecked);
+                    alert(result.message);
+                } else {
+                    alert(result.message);
+                }
+            } catch (error) {
+                console.error('Error toggling auto-install deps:', error);
+                alert('Failed to toggle auto-install dependencies.');
+            }
+        }
+
+        function updateAutoInstallDepsStatusText(isEnabled) {
+            const statusText = document.getElementById('auto-install-status-text');
+            statusText.textContent = `(Currently: ${isEnabled ? 'Enabled' : 'Disabled'})`;
+        }
+
         // --- Theme Switcher Logic ---
         function applyTheme(theme) {
             document.body.classList.remove('light-theme', 'dark-theme');
@@ -731,7 +1070,7 @@
             const newTheme = currentTheme === 'light' ? 'dark' : 'light';
             applyTheme(newTheme);
         }
-        
+
         // --- Top-level Event Listeners ---
         document.addEventListener('DOMContentLoaded', () => {
             // Apply theme on load
@@ -748,7 +1087,9 @@
             fetchAndDisplayMessages();
             fetchConfigAndPopulateForm();
             fetchAndDisplayApprovals();
-            fetchAndDisplayTokenUsage(); 
+            fetchAndDisplayTokenUsage();
+            fetchAndDisplayPlugins();
+            fetchAutoInstallDepsStatus();
 
             // Polling for dynamic data
             setInterval(fetchAndDisplayAgents, 10000);
@@ -756,12 +1097,16 @@
             setInterval(fetchAndDisplayMessages, 5000);
             setInterval(fetchAndDisplayApprovals, 5000);
             setInterval(fetchAndDisplayTokenUsage, 5000);
+            setInterval(fetchAndDisplayPlugins, 10000);
+            setInterval(fetchAutoInstallDepsStatus, 5000);
 
             // Attach form submission handlers and other buttons
             document.getElementById('shutdown-hub-button').addEventListener('click', handleShutdownHub);
+            document.getElementById('reset-hub-button').addEventListener('click', handleResetHub);
             document.getElementById('config-form').addEventListener('submit', handleConfigFormSubmit);
             document.getElementById('add-agent-form').addEventListener('submit', handleAddAgentFormSubmit);
-            
+            document.getElementById('plugin-upload-form').addEventListener('submit', handlePluginUploadFormSubmit);
+
             // Open the default tab
             document.getElementsByClassName("tab-link")[0].click();
         });
@@ -779,6 +1124,22 @@
                 } catch (error) {
                     console.error('Error:', error);
                     alert('Failed to send shutdown request. Hub might already be down or unreachable.');
+                }
+            }
+        }
+
+        async function handleResetHub() {
+            if (confirm('Are you sure you want to RESET the Hub?\n\nThis will:\n- Kill all running agents\n- Clear all messages, experiences, and approvals\n- Clear all agent registrations\n\nSettings and plugins will be preserved.')) {
+                try {
+                    const response = await fetch('/api/reset', { method: 'POST' });
+                    const data = await response.json();
+                    alert(data.message);
+                    if (data.status === 'success') {
+                        window.location.reload();
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    alert('Failed to reset hub.');
                 }
             }
         }
@@ -808,4 +1169,26 @@
                 alert('Failed to launch agent.');
             }
         }
+
+        async function handlePluginUploadFormSubmit(event) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+
+            try {
+                const response = await fetch('/api/plugins/upload', {
+                    method: 'POST',
+                    body: formData // No Content-Type header needed for FormData
+                });
+                const result = await response.json();
+                alert(result.message);
+                if (result.status === 'success') {
+                    event.target.reset(); // Clear the file input
+                    fetchAndDisplayPlugins(); // Refresh the plugin list
+                }
+            } catch (error) {
+                console.error('Error uploading plugin:', error);
+                alert('Failed to upload plugin.');
+            }
+        }
     </script>
+</html>

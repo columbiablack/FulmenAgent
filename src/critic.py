@@ -1,7 +1,7 @@
 from typing import Dict, Any
 import json
-from agent_network.src.planner import Planner # Import Planner
-from agent_network.src.memory import Memory # Import Memory
+from agent_network.src.planner import Planner
+from agent_network.src.memory import Memory
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,16 +14,10 @@ class Critic:
     def evaluate(self, task: str, step_result: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Critic: Evaluating step result using LLM.")
 
-        llm_context = {
-            "soul_description": self.memory.get_knowledge("soul_description"),
-            "knowledge": self.memory.get_all_knowledge()
-        }
-
         # Construct a prompt for the LLM to get feedback
         prompt = f"""
         You are the Critic for an AI agent. Your role is to evaluate the outcome of a single step
         performed by the agent to accomplish a task. Provide constructive feedback.
-        Consider the agent's core personality (soul_description) and overall knowledge when evaluating.
 
         Task: {task}
         Step Result: {json.dumps(step_result, indent=2)}
@@ -39,9 +33,11 @@ class Critic:
             "feedback": "The file was read successfully, and its content is relevant to the task."
         }}
         """
-        
+
         try:
-            llm_response_str = self.planner.evaluate_prompt(prompt, context=llm_context)
+            llm_response = self.planner.evaluate_prompt(prompt)
+            # evaluate_prompt returns {"content": str, "token_usage": dict}
+            llm_response_str = llm_response["content"]
             llm_evaluation = json.loads(llm_response_str.strip())
 
             evaluation = llm_evaluation.get("evaluation", "neutral")

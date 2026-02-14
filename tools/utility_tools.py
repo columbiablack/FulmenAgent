@@ -222,19 +222,16 @@ class LLMCallTool(BaseTool):
     def __init__(self, planner_instance): # Accept planner instance
         super().__init__(
             name="llm_call",
-            description="Makes a call to the LLM. Takes 'prompt' as argument. Can optionally specify 'num_responses' (default 1) to query multiple models in parallel. Returns a single string or a list of strings if num_responses > 1."
+            description="Makes a call to the LLM. Takes 'prompt' as argument. Returns the LLM response content."
         )
         self.planner = planner_instance # Store the planner instance
 
-    def run(self, prompt: str, num_responses: int = 1) -> Dict[str, Union[str, List[str]]]: # Changed return type hint
-        logger.info(f"[LLMCallTool]: Calling LLM with prompt: '{prompt[:100]}...' and num_responses={num_responses}")
+    def run(self, prompt: str) -> Dict[str, Union[str, List[str]]]:
+        logger.info(f"[LLMCallTool]: Calling LLM with prompt: '{prompt[:100]}...'")
         try:
-            # Use the planner's evaluate_prompt method which in turn calls _call_llm
-            llm_response = self.planner.evaluate_prompt(prompt, num_responses=num_responses)
-            
-            # evaluate_prompt already returns str or List[str] based on num_responses
-            # We just need to wrap it in our tool's expected dictionary format
-            return {"status": "success", "output": llm_response}
+            # evaluate_prompt returns {"content": str, "token_usage": dict}
+            llm_response = self.planner.evaluate_prompt(prompt)
+            return {"status": "success", "output": llm_response["content"]}
         except Exception as e:
             logger.error(f"[LLMCallTool]: Error calling LLM: {e}")
             return {"status": "error", "message": f"Error calling LLM: {e}"}
