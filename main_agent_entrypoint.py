@@ -201,7 +201,7 @@ def main():
         all_agents.append(agent) # Add agent to the list of all agents
 
         # Determine connector type
-        if i < len(connector_types_arg) and connector_types_arg[i] in ["discord", "telegram", "line", "none"]:
+        if i < len(connector_types_arg) and connector_types_arg[i] in ["discord", "telegram", "line", "voice", "whatsapp", "x", "none"]:
             connector_type_choice = connector_types_arg[i]
             console.print(f"  -> Using connector type '{connector_type_choice}' for {agent_name} from arguments.")
         else:
@@ -209,7 +209,7 @@ def main():
             if sys.stdin.isatty():
                 connector_type_choice = Prompt.ask(
                     f"[bold cyan]Choose connector type for {agent_name}[/bold cyan]\n",
-                    choices=["discord", "telegram", "line", "none"],
+                    choices=["discord", "telegram", "line", "voice", "none"],
                     default="none"
                 ).lower()
             else:
@@ -278,6 +278,10 @@ def main():
                             console.print("[bold yellow]WARNING: For security and persistence, consider adding these to your .env file.[/bold yellow]")
                         
                         connector = ConnectorClass(agent=agent, logger=logger, channel_access_token=channel_access_token, channel_secret=channel_secret)
+
+                    elif connector_type_choice == "voice":
+                        voice_port = int(os.environ.get(f"{agent_name.upper()}_VOICE_PORT", "5002"))
+                        connector = ConnectorClass(agent=agent, logger=logger, port=voice_port)
 
                     if connector:
                         active_connectors.append(connector)

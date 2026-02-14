@@ -24,28 +24,11 @@ from agent_network.tools.shell_tool import RunShellCommandTool
 from agent_network.tools.utility_tools import PrintTaskTool, WebFetchTool, ImageAnalysisTool, SendImageTool, ImageGenerationTool, FinishTaskTool, SendUserMessageTool, SendAgentMessageTool, LLMCallTool
 from agent_network.tools.email_tools import EmailCheckTool, EmailSendTool
 from agent_network.tools.calendar_tools import CalendarCheckTool, CalendarAddEventTool
-from agent_network.tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool
+from agent_network.tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool, SendSMSTool, CheckCallStatusTool
 from agent_network.tools.contact_tools import AccessContactsTool
-
-# Imports for Google Cloud credentials check for voice tools
-import google.auth
-from google.auth import exceptions as google_auth_exceptions
 
 # Define a module-level logger
 logger = logging.getLogger(__name__)
-
-def _check_google_credentials() -> bool:
-    """Checks if Google Cloud credentials are available."""
-    try:
-        credentials, project_id = google.auth.default()
-        logger.info("Google Cloud credentials found.")
-        return True
-    except google_auth_exceptions.DefaultCredentialsError:
-        logger.warning("Google Cloud credentials not found. Voice tools will be disabled.")
-        return False
-    except Exception as e:
-        logger.error(f"An unexpected error occurred while checking Google Cloud credentials: {e}", exc_info=True)
-        return False
 
 def _load_plugins(agent_name: str, hub_url: str) -> List[Tuple[str, Dict[str, Any], List[BaseTool]]]:
     """
@@ -232,16 +215,19 @@ class Agent:
             LLMCallTool(self.planner) # Pass the planner instance here
         ]
 
-        # Add conditional tools based on environment variables and credentials
-        if os.environ.get("ENABLE_VOICE_TOOLS", "no").lower() == "yes" and _check_google_credentials():
+        # Add voice/phone tools if enabled (Twilio-based, no Google Cloud required)
+        if os.environ.get("ENABLE_VOICE_TOOLS", "no").lower() == "yes":
             tools.extend([
                 MakePhoneCallTool(),
-                TranscribeVoiceTool(),
+                SendSMSTool(),
+                CheckCallStatusTool(),
                 SynthesizeSpeechTool(),
+                TranscribeVoiceTool(),
                 ColdCallTool()
             ])
+            self.logger.info("Voice/phone tools enabled (Twilio).")
         else:
-            self.logger.info("Voice tools not enabled or Google Cloud credentials missing.")
+            self.logger.info("Voice tools not enabled. Set ENABLE_VOICE_TOOLS=yes in Admin Settings.")
 
         if os.environ.get("ENABLE_EMAIL_TOOLS", "no").lower() == "yes":
             tools.extend([

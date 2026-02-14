@@ -340,9 +340,14 @@
                     <div><label for="line-channel-secret">LINE Channel Secret:</label><input type="password" id="line-channel-secret" name="LINEAGENT_LINE_CHANNEL_SECRET"></div>
                     <div><label for="line-channel-access-token">LINE Channel Access Token:</label><input type="password" id="line-channel-access-token" name="LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN"></div>
                     
-                    <h3>Voice (Twilio) Configuration</h3>
+                    <h3>Voice / Phone (Twilio) Configuration</h3>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="checkbox" id="enable-voice-tools" name="ENABLE_VOICE_TOOLS" value="yes">
+                        <label for="enable-voice-tools" style="min-width: auto;">Enable Voice/Phone Tools</label>
+                    </div>
                     <div><label for="twilio-account-sid">Twilio Account SID:</label><input type="text" id="twilio-account-sid" name="TWILIO_ACCOUNT_SID"></div>
                     <div><label for="twilio-auth-token">Twilio Auth Token:</label><input type="password" id="twilio-auth-token" name="TWILIO_AUTH_TOKEN"></div>
+                    <div><label for="twilio-phone-number">Twilio Phone Number:</label><input type="text" id="twilio-phone-number" name="TWILIO_PHONE_NUMBER" placeholder="+12065551234"></div>
 
                     <h3>WhatsApp Configuration</h3>
                     <div><label for="whatsapp-phone-number-id">WhatsApp Phone Number ID:</label><input type="text" id="whatsapp-phone-number-id" name="WHATSAPP_PHONE_NUMBER_ID"></div>
@@ -397,6 +402,9 @@
                     
 
                                                                                 <div><label for="enable-voyage-ai">Enable Voyage AI:</label><input type="checkbox" id="enable-voyage-ai" name="ENABLE_VOYAGE_AI" value="yes"></div>
+
+                    <h3>Exa.ai Search Configuration</h3>
+                    <div><label for="exa-api-key">Exa.ai API Key:</label><input type="password" id="exa-api-key" name="EXA_API_KEY" placeholder="Get key from dashboard.exa.ai"></div>
 
                     
 
@@ -618,8 +626,10 @@
                 document.getElementById('default-execution-mode').value = config.DEFAULT_EXECUTION_MODE || 'safe';
                 document.getElementById('default-batch-experience').value = config.DEFAULT_BATCH_EXPERIENCE || 'no';
                 document.getElementById('default-proactive-interval').value = config.DEFAULT_PROACTIVE_INTERVAL || '600';
+                document.getElementById('enable-voice-tools').checked = (config.ENABLE_VOICE_TOOLS === 'yes');
                 document.getElementById('twilio-account-sid').value = config.TWILIO_ACCOUNT_SID || '';
                 document.getElementById('twilio-auth-token').value = config.TWILIO_AUTH_TOKEN || '';
+                document.getElementById('twilio-phone-number').value = config.TWILIO_PHONE_NUMBER || '';
                 document.getElementById('whatsapp-phone-number-id').value = config.WHATSAPP_PHONE_NUMBER_ID || '';
                 document.getElementById('whatsapp-access-token').value = config.WHATSAPP_ACCESS_TOKEN || '';
                 document.getElementById('x-consumer-key').value = config.X_CONSUMER_KEY || '';
@@ -632,6 +642,7 @@
                 document.getElementById('enable-openrouter').checked = (config.ENABLE_OPENROUTER === 'yes');
                 document.getElementById('voyage-ai-api-key').value = config.VOYAGE_AI_API_KEY || '';
                 document.getElementById('enable-voyage-ai').checked = (config.ENABLE_VOYAGE_AI === 'yes');
+                document.getElementById('exa-api-key').value = config.EXA_API_KEY || '';
 
                 // Set initial values for Add New Agent form based on Admin Settings defaults
                 document.getElementById('proactive-loops').checked = (config.DEFAULT_PROACTIVE_LOOPS === 'yes');

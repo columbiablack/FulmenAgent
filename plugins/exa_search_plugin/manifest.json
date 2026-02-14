@@ -1,0 +1,7 @@
+{
+  "name": "Exa Search Plugin",
+  "version": "1.0.0",
+  "description": "AI-powered web search using Exa.ai API. Supports semantic search, find similar pages, and content retrieval.",
+  "author": "Agent Network",
+  "entry_point": "tools:get_tools"
+}

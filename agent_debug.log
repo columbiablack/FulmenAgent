@@ -1,0 +1,81 @@
+Starting plugin discovery...
+Discovering all plugins in /root/agent/agent_network/plugins...
+Discovered plugin: Exa Search Plugin
+Discovered plugin: My Weather Plugin
+Finished plugin discovery. Found 2 plugins.
+Hub server starting on http://0.0.0.0:5000
+Serving on http://0.0.0.0:5000
+Hub reset requested.
+Hub reset complete. Killed 0 agents, cleared all memory.
+[DEBUG api_get_config] Before masking - Key: OPENROUTER_API_KEY, Value: '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'
+[DEBUG api_get_config] After masking - Key: OPENROUTER_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: MOONSHOT_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: DISCORDAGENT_DISCORD_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TELEGRAMAGENT_TELEGRAM_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TWILIO_AUTH_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: WHATSAPP_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: VOYAGE_AI_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: EXA_API_KEY, Value: ''
+Starting new HTTPS connection (1): openrouter.ai:443
+https://openrouter.ai:443 "GET /api/v1/models HTTP/1.1" 200 None
+Fetched 340 models from OpenRouter (31 free).
+Task queue depth is 1
+Task queue depth is 1
+Task queue depth is 1
+[DEBUG api_get_config] Before masking - Key: OPENROUTER_API_KEY, Value: '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'
+[DEBUG api_get_config] After masking - Key: OPENROUTER_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: MOONSHOT_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: DISCORDAGENT_DISCORD_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TELEGRAMAGENT_TELEGRAM_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TWILIO_AUTH_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: WHATSAPP_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: VOYAGE_AI_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: EXA_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: OPENROUTER_API_KEY, Value: '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'
+[DEBUG api_get_config] After masking - Key: OPENROUTER_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: MOONSHOT_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: DISCORDAGENT_DISCORD_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TELEGRAMAGENT_TELEGRAM_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TWILIO_AUTH_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: WHATSAPP_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: VOYAGE_AI_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: EXA_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: OPENROUTER_API_KEY, Value: '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'
+[DEBUG api_get_config] After masking - Key: OPENROUTER_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: MOONSHOT_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: DISCORDAGENT_DISCORD_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TELEGRAMAGENT_TELEGRAM_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: TWILIO_AUTH_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: WHATSAPP_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_CONSUMER_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN, Value: ''
+[DEBUG api_get_config] Before masking - Key: X_ACCESS_TOKEN_SECRET, Value: ''
+[DEBUG api_get_config] Before masking - Key: VOYAGE_AI_API_KEY, Value: ''
+[DEBUG api_get_config] Before masking - Key: EXA_API_KEY, Value: ''
+Task queue depth is 1
+Task queue depth is 1
+Task queue depth is 1
+Task queue depth is 1
+Task queue depth is 1
+Task queue depth is 1

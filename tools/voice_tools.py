@@ -1,308 +1,281 @@
 from agent_network.tools.base_tool import BaseTool
 import logging
-import asyncio
-from typing import Dict, Any, Optional
-import os # NEW: For file path operations
-from google.cloud import texttospeech # NEW: For Google Cloud TTS
-from google.cloud import speech # NEW: For Google Cloud STT
-from google.protobuf.json_format import MessageToJson # NEW: For serializing STT response if needed
-
-import time # NEW: For simulated call_id
-# import aiohttp # Potentially for AMI client if using websockets or HTTP
+import os
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
 
-# --- NEW: Asterisk Manager Interface (AMI) Client (Placeholder) ---
-# This would be a more robust client in a full implementation,
-# likely using an existing library like Pystx or a custom async client.
-class AmiClient:
-    def __init__(self, host: str, username: str, secret: str):
-        self.host = host
-        self.username = username
-        self.secret = secret
-        self.connected = False
-        logger.info(f"[AmiClient]: Initialized for host {host}, user {username}")
-
-    async def connect(self) -> bool:
-        # Simulate connection to AMI
-        logger.info(f"[AmiClient]: Simulating connection to AMI at {self.host} for user {self.username}...")
-        await asyncio.sleep(1) # Simulate network delay
-        self.connected = True
-        logger.info(f"[AmiClient]: Simulated connection to AMI successful.")
-        return True
-
-    async def disconnect(self):
-        # Simulate disconnection from AMI
-        logger.info(f"[AmiClient]: Simulating disconnection from AMI...")
-        await asyncio.sleep(0.5)
-        self.connected = False
-        logger.info(f"[AmiClient]: Simulated disconnection successful.")
-
-    async def originate_call(self, channel: str, context: str, exten: str, priority: int = 1, application: str = None, data: str = None) -> Dict[str, Any]:
-        """
-        Simulates originating a call via AMI.
-        channel: e.g., 'SIP/my_trunk/phone_number' or 'SIP/extension'
-        context: The context in extensions.conf
-        exten: The extension to dial in the context
-        """
-        if not self.connected:
-            return {"status": "error", "message": "Not connected to AMI."}
-
-        logger.info(f"[AmiClient]: Simulating AMI Originate: Channel={channel}, Context={context}, Exten={exten}, App={application}, Data={data}")
-        await asyncio.sleep(2) # Simulate call setup time
-        
-        # Simulate successful origination
-        if channel.startswith("SIP/") or channel.isdigit(): # Basic check for SIP channel or internal extension
-            logger.info(f"[AmiClient]: Simulated call originated successfully to {channel}.")
-            return {"status": "success", "message": "Simulated call originated.", "call_id": f"simulated_call_{time.time()}"}
-        else:
-            logger.warning(f"[AmiClient]: Simulated call origination failed for invalid channel: {channel}.")
-            return {"status": "error", "message": "Simulated call origination failed: Invalid channel format."}
-
-    async def playback(self, channel: str, filename: str) -> Dict[str, Any]:
-        """Simulates playing a file on a channel via AMI."""
-        if not self.connected:
-            return {"status": "error", "message": "Not connected to AMI."}
-        logger.info(f"[AmiClient]: Simulating AMI Playback on {channel} with file {filename}...")
-        await asyncio.sleep(1) # Simulate playback time
-        return {"status": "success", "message": "Simulated playback initiated."}
-
-    async def get_variable(self, channel: str, variable: str) -> Dict[str, Any]:
-        """Simulates getting a channel variable via AMI."""
-        if not self.connected:
-            return {"status": "error", "message": "Not connected to AMI."}
-        logger.info(f"[AmiClient]: Simulating AMI GetVariable for {channel} variable {variable}...")
-        await asyncio.sleep(0.5)
-        # Simulate a common variable, e.g., "DIALSTATUS"
-        simulated_value = "ANSWER" if "DIALSTATUS" in variable.upper() else "SIM_VALUE"
-        return {"status": "success", "message": "Simulated variable retrieved.", "variable": variable, "value": simulated_value}
-
-# Set Google Application Credentials environment variable
-# This assumes the user will place their service account key file
-# in the project root and configure its path via configure_agent.py
-# If GOOGLE_APPLICATION_CREDENTIALS is not set, the clients will look for it
-# in default locations, or need explicit credential passing.
-# For simplicity, we'll guide the user to set it via env variable.
-
 
 class MakePhoneCallTool(BaseTool):
-    def __init__(self, ami_client: Optional[AmiClient] = None):
-        super().__init__(
-            name="make_phone_call",
-            description="Initiates a phone call. Requires 'message' (text to speak). Can call 'to_number' (external PSTN, simulated with cost warning) or 'internal_extension' (simulated free internal call). Specify either 'to_number' OR 'internal_extension'. NOTE: External calls are simulated and incur costs with real VoIP providers."
-        )
-        self.ami_client = ami_client # AmiClient instance, if FreePBX is configured
+    """Makes a real phone call via Twilio and speaks a message using TwiML."""
 
-    async def run(self, message: str, to_number: Optional[str] = None, internal_extension: Optional[str] = None) -> Dict[str, Any]:
-        if to_number and internal_extension:
-            return {"status": "error", "message": "Specify either 'to_number' or 'internal_extension', not both."}
-        if not to_number and not internal_extension:
-            return {"status": "error", "message": "Specify either 'to_number' or 'internal_extension'."}
-
-        if to_number:
-            logger.info(f"[MakePhoneCallTool]: SIMULATED EXTERNAL CALL: Attempting to call {to_number} and say: '{message}'")
-            logger.warning("NOTE: This is a simulation for an external call. Real phone calls to PSTN numbers require integration with a VoIP provider (like Twilio) and will incur charges. Configure a VOIP_API_SERVICE in configure_agent.py for real external calls.")
-            target = to_number
-            call_type = "external_pstn"
-        elif internal_extension:
-            logger.info(f"[MakePhoneCallTool]: Attempting to call internal extension {internal_extension} with message: '{message}'")
-            target = internal_extension
-            call_type = "internal_extension"
-
-            if self.ami_client:
-                # Simulate AMI interaction for internal calls
-                if not self.ami_client.connected:
-                    await self.ami_client.connect() # Connect if not already
-
-                # Assume a default context for FreePBX internal calls for simulation
-                ami_result = await self.ami_client.originate_call(
-                    channel=f"SIP/{internal_extension}", # Assuming SIP extension
-                    context="from-internal", # Common FreePBX context
-                    exten=internal_extension,
-                    priority=1
-                )
-                
-                if ami_result["status"] == "success":
-                    logger.info(f"[MakePhoneCallTool]: FreePBX simulated internal call originated to {internal_extension}. Playing message...")
-                    # In a real scenario, you'd integrate TTS to play the message over the call
-                    # For now, simulate playback
-                    await asyncio.sleep(2) # Simulate message playback time
-                    return {"status": "success", "output": f"FreePBX simulated internal call to {internal_extension} initiated with message '{message}'."}
-                else:
-                    return {"status": "error", "message": f"FreePBX simulated internal call failed: {ami_result['message']}"}
-            else:
-                logger.info(f"[MakePhoneCallTool]: Simulating internal call as no FreePBX AMI client is configured.")
-                logger.info("NOTE: For real FreePBX internal calls, ensure a FreePBX/Asterisk AMI client is configured.")
-
-        # Simulate call initiation and message playing for generic case or external
-        await asyncio.sleep(3) # Simulate call setup and message playback
-        logger.info(f"[MakePhoneCallTool]: Simulated {call_type} call to {target} initiated. Message '{message}' simulated as played.")
-        return {"status": "success", "output": f"Simulated {call_type} call to {target} initiated with message '{message}'."}
-
-class TranscribeVoiceTool(BaseTool):
     def __init__(self):
         super().__init__(
-            name="transcribe_voice",
-            description="Transcribes a segment of recorded voice audio (WAV format) into text using Google Cloud Speech-to-Text. Requires 'audio_file_path' as an argument. Make sure GOOGLE_APPLICATION_CREDENTIALS environment variable is set."
+            name="make_phone_call",
+            description=(
+                "Makes a phone call using Twilio and speaks a message to the recipient. "
+                "Requires 'to_number' (E.164 format like +12065551234) and 'message' (text to speak). "
+                "Optional: 'voice' (default 'alice'), 'language' (default 'en-US')."
+            )
         )
-        self.client = speech.SpeechClient()
 
-    async def run(self, audio_file_path: str):
-        if not os.path.exists(audio_file_path):
-            logger.error(f"[TranscribeVoiceTool]: Audio file not found at {audio_file_path}")
-            return {"status": "error", "message": f"Audio file not found at {audio_file_path}"}
-        
-        # Determine audio format (assuming WAV for now)
-        # For more robust solution, inspect file header or allow format argument
-        with open(audio_file_path, "rb") as audio_file:
-            content = audio_file.read()
+    def run(self, to_number: str, message: str, voice: str = "alice", language: str = "en-US", **kwargs) -> Dict[str, Any]:
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_PHONE_NUMBER", "")
 
-        audio = speech.RecognitionAudio(content=content)
-        config = speech.RecognitionConfig(
-            encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16, # Assuming common WAV format
-            sample_rate_hertz=16000, # Common sample rate
-            language_code="en-US",
-        )
+        if not account_sid or not auth_token:
+            return {"status": "error", "output": "Twilio credentials not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in Admin Settings."}
+        if not from_number:
+            return {"status": "error", "output": "TWILIO_PHONE_NUMBER not configured. Set it in Admin Settings."}
+        if not to_number:
+            return {"status": "error", "output": "to_number is required (E.164 format, e.g. +12065551234)."}
 
         try:
-            logger.info(f"[TranscribeVoiceTool]: Transcribing audio from {audio_file_path} using Google Cloud STT...")
-            response = self.client.recognize(config=config, audio=audio)
-            
-            transcript = ""
-            for result in response.results:
-                transcript += result.alternatives[0].transcript + " "
-            
-            logger.info(f"[TranscribeVoiceTool]: Transcription complete. Text: '{transcript.strip()}'")
-            return {"status": "success", "output": transcript.strip()}
+            from twilio.rest import Client
+            from twilio.twiml.voice_response import VoiceResponse
+
+            client = Client(account_sid, auth_token)
+
+            # Build TwiML to speak the message
+            twiml = VoiceResponse()
+            twiml.say(message, voice=voice, language=language)
+
+            call = client.calls.create(
+                to=to_number,
+                from_=from_number,
+                twiml=str(twiml)
+            )
+
+            logger.info(f"[MakePhoneCallTool] Call initiated: SID={call.sid}, to={to_number}, status={call.status}")
+            return {
+                "status": "success",
+                "output": f"Phone call initiated to {to_number}. Call SID: {call.sid}. Status: {call.status}.",
+                "call_sid": call.sid
+            }
+        except ImportError:
+            return {"status": "error", "output": "twilio package not installed. Run: pip install twilio"}
         except Exception as e:
-            logger.error(f"[TranscribeVoiceTool]: Error during Google Cloud STT transcription: {e}")
-            return {"status": "error", "message": f"Google Cloud STT transcription failed: {e}"}
+            logger.error(f"[MakePhoneCallTool] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Failed to make call: {e}"}
+
+
+class SendSMSTool(BaseTool):
+    """Sends an SMS message via Twilio."""
+
+    def __init__(self):
+        super().__init__(
+            name="send_sms",
+            description=(
+                "Sends an SMS text message using Twilio. "
+                "Requires 'to_number' (E.164 format like +12065551234) and 'message' (text to send). "
+                "Max 1600 characters."
+            )
+        )
+
+    def run(self, to_number: str, message: str, **kwargs) -> Dict[str, Any]:
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_PHONE_NUMBER", "")
+
+        if not account_sid or not auth_token:
+            return {"status": "error", "output": "Twilio credentials not configured. Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in Admin Settings."}
+        if not from_number:
+            return {"status": "error", "output": "TWILIO_PHONE_NUMBER not configured. Set it in Admin Settings."}
+        if not to_number:
+            return {"status": "error", "output": "to_number is required (E.164 format, e.g. +12065551234)."}
+
+        try:
+            from twilio.rest import Client
+
+            client = Client(account_sid, auth_token)
+            sms = client.messages.create(
+                body=message[:1600],
+                from_=from_number,
+                to=to_number
+            )
+
+            logger.info(f"[SendSMSTool] SMS sent: SID={sms.sid}, to={to_number}, status={sms.status}")
+            return {
+                "status": "success",
+                "output": f"SMS sent to {to_number}. Message SID: {sms.sid}. Status: {sms.status}.",
+                "message_sid": sms.sid
+            }
+        except ImportError:
+            return {"status": "error", "output": "twilio package not installed. Run: pip install twilio"}
+        except Exception as e:
+            logger.error(f"[SendSMSTool] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Failed to send SMS: {e}"}
+
+
+class CheckCallStatusTool(BaseTool):
+    """Checks the status of a Twilio phone call by its SID."""
+
+    def __init__(self):
+        super().__init__(
+            name="check_call_status",
+            description=(
+                "Checks the status of a phone call by its Call SID. "
+                "Requires 'call_sid'. Returns call status, duration, direction, etc."
+            )
+        )
+
+    def run(self, call_sid: str, **kwargs) -> Dict[str, Any]:
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+
+        if not account_sid or not auth_token:
+            return {"status": "error", "output": "Twilio credentials not configured."}
+        if not call_sid:
+            return {"status": "error", "output": "call_sid is required."}
+
+        try:
+            from twilio.rest import Client
+
+            client = Client(account_sid, auth_token)
+            call = client.calls(call_sid).fetch()
+
+            return {
+                "status": "success",
+                "output": f"Call {call_sid}: status={call.status}, duration={call.duration}s, direction={call.direction}",
+                "call_status": call.status,
+                "duration": call.duration,
+                "direction": call.direction,
+                "from": call.from_formatted,
+                "to": call.to_formatted
+            }
+        except ImportError:
+            return {"status": "error", "output": "twilio package not installed. Run: pip install twilio"}
+        except Exception as e:
+            logger.error(f"[CheckCallStatusTool] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Failed to check call status: {e}"}
+
 
 class SynthesizeSpeechTool(BaseTool):
+    """Text-to-speech using Edge TTS (free, no API key needed)."""
+
     def __init__(self):
         super().__init__(
             name="synthesize_speech",
-            description="Converts text into spoken audio (WAV format) using Google Cloud Text-to-Speech. Requires 'text' and 'output_file_path' as arguments. Make sure GOOGLE_APPLICATION_CREDENTIALS environment variable is set."
-        )
-        self.client = texttospeech.TextToSpeechClient()
-
-    async def run(self, text: str, output_file_path: str):
-        synthesis_input = texttospeech.SynthesisInput(text=text)
-        voice = texttospeech.VoiceSelectionParams(
-            language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
-        )
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.LINEAR16 # WAV format
-        )
-
-        try:
-            logger.info(f"[SynthesizeSpeechTool]: Synthesizing speech for text: '{text}' into {output_file_path} using Google Cloud TTS...")
-            response = self.client.synthesize_speech(
-                input=synthesis_input, voice=voice, audio_config=audio_config
+            description=(
+                "Converts text into spoken audio (MP3) using Microsoft Edge TTS (free). "
+                "Requires 'text' and 'output_file_path'. "
+                "Optional: 'voice' (default 'en-US-JennyNeural'), 'rate' (e.g. '+20%'), 'volume' (e.g. '-10%')."
             )
-
-            with open(output_file_path, "wb") as out_file:
-                out_file.write(response.audio_content)
-            
-            logger.info(f"[SynthesizeSpeechTool]: Speech synthesis complete. Audio saved to {output_file_path}.")
-            return {"status": "success", "output": output_file_path}
-        except Exception as e:
-            logger.error(f"[SynthesizeSpeechTool]: Error during Google Cloud TTS synthesis: {e}")
-            return {"status": "error", "message": f"Google Cloud TTS synthesis failed: {e}"}
-
-class ColdCallTool(BaseTool):
-    def __init__(self, make_phone_call_tool: MakePhoneCallTool, synthesize_speech_tool: SynthesizeSpeechTool, transcribe_voice_tool: TranscribeVoiceTool):
-        super().__init__(
-            name="cold_call",
-            description="Executes a simulated cold call to a contact. Requires 'contact_name', 'phone_number', 'call_script' (text for agent to speak), and 'expected_response_duration' (seconds for listening for a response). Outputs call outcome and transcribed response."
-        )
-        self.make_phone_call_tool = make_phone_call_tool
-        self.synthesize_speech_tool = synthesize_speech_tool
-        self.transcribe_voice_tool = transcribe_voice_tool
-
-    async def run(self, contact_name: str, phone_number: str, call_script: str, expected_response_duration: int = 5) -> Dict[str, Any]:
-        logger.info(f"[ColdCallTool]: Initiating simulated cold call to {contact_name} ({phone_number})...")
-        call_outcome = {"status": "simulated_call_initiated", "message": f"Simulating call to {phone_number} for {contact_name}."}
-
-        try:
-            # Step 1: Synthesize the call script
-            temp_dir = "temp_audio"
-            os.makedirs(temp_dir, exist_ok=True)
-            audio_output_path = os.path.join(temp_dir, f"call_script_{contact_name.replace(' ', '_')}_{asyncio.get_event_loop().time()}.wav")
-            synthesis_result = await self.synthesize_speech_tool.run(text=call_script, output_file_path=audio_output_path)
-            
-            if synthesis_result["status"] != "success":
-                return {"status": "error", "message": f"Failed to synthesize speech for call script: {synthesis_result['message']}"}
-            
-            # Step 2: "Make" the phone call (simulated)
-            phone_call_result = await self.make_phone_call_tool.run(to_number=phone_number, message=f"Playing synthesized script from {audio_output_path}")
-            
-            if phone_call_result["status"] != "success":
-                return {"status": "error", "message": f"Failed to simulate phone call: {phone_call_result['message']}"}
-
-            # Step 3: Simulate listening for a response and transcribing
-            logger.info(f"[ColdCallTool]: Simulating listening for {expected_response_duration} seconds...")
-            await asyncio.sleep(expected_response_duration)
-            
-            # For simulation, we'll just generate a dummy transcription
-            simulated_response_audio_path = os.path.join(temp_dir, f"response_{contact_name.replace(' ', '_')}_{asyncio.get_event_loop().time()}.wav")
-            # In a real scenario, incoming audio would be saved to simulated_response_audio_path
-            # We'll create a dummy file for the TranscribeVoiceTool to process
-            with open(simulated_response_audio_path, "wb") as f:
-                f.write(b"dummy audio content")
-
-            logger.info(f"[ColdCallTool]: Simulated incoming audio saved to {simulated_response_audio_path}. Now transcribing...")
-
-            # Simulate transcription of the response
-            transcription_result = await self.transcribe_voice_tool.run(audio_file_path=simulated_response_audio_path)
-            
-            # Clean up dummy audio file
-            os.remove(simulated_response_audio_path)
-
-            transcribed_response = transcription_result["output"] if transcription_result["status"] == "success" else "Failed to transcribe simulated response."
-
-            call_outcome = {
-                "status": "success",
-                "message": f"Simulated cold call to {contact_name} completed.",
-                "call_script_played": call_script,
-                "simulated_transcribed_response": transcribed_response,
-                "cost_note": "NOTE: Real calls would incur charges from your VoIP provider."
-            }
-            logger.info(f"[ColdCallTool]: Simulated cold call outcome for {contact_name}: {call_outcome['message']}")
-            return call_outcome
-
-        except Exception as e:
-            logger.error(f"[ColdCallTool]: Error during simulated cold call to {contact_name}: {e}")
-            return {"status": "error", "message": f"Error during simulated cold call: {e}"}
-
-# NEW: Edge TTS Tool
-class EdgeTTSTool(BaseTool):
-    def __init__(self):
-        super().__init__(
-            name="edge_tts",
-            description="Converts text into spoken audio (MP3 format) using Microsoft Edge's Text-to-Speech. Requires 'text' and 'output_file_path'. Optional args: 'voice' (e.g., 'en-US-JennyNeural'), 'rate' (e.g., '+20%'), 'volume' (e.g., '-10%')."
         )
 
-    async def run(self, text: str, output_file_path: str, voice: str = "en-US-JennyNeural", rate: str = "+0%", volume: str = "+0%") -> Dict[str, Any]:
+    def run(self, text: str, output_file_path: str, voice: str = "en-US-JennyNeural",
+            rate: str = "+0%", volume: str = "+0%", **kwargs) -> Dict[str, Any]:
         try:
-            # Basic path validation to prevent path traversal
-            from agent_network.tools.file_tools import _validate_path # Import the helper
-            validated_output_path = _validate_path(output_file_path, self.name)
-            
-            # Ensure the directory exists
-            os.makedirs(os.path.dirname(validated_output_path), exist_ok=True)
+            import edge_tts
+            import asyncio
+
+            os.makedirs(os.path.dirname(output_file_path) if os.path.dirname(output_file_path) else ".", exist_ok=True)
 
             communicate = edge_tts.Communicate(text, voice, rate=rate, volume=volume)
-            logger.info(f"[EdgeTTSTool]: Synthesizing speech for text: '{text}' into {validated_output_path} using Edge TTS...")
-            
-            # Edge TTS is async, so run it
-            await communicate.save(validated_output_path)
-            
-            logger.info(f"[EdgeTTSTool]: Speech synthesis complete. Audio saved to {validated_output_path}.")
-            return {"status": "success", "output": validated_output_path}
-        except ValueError as ve:
-            return {"status": "error", "message": str(ve)}
-        except Exception as e:
-            logger.error(f"[EdgeTTSTool]: Error during Edge TTS synthesis: {e}", exc_info=True)
-            return {"status": "error", "message": f"Edge TTS synthesis failed: {e}"}
 
+            # Run the async save in a new event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        pool.submit(asyncio.run, communicate.save(output_file_path)).result()
+                else:
+                    loop.run_until_complete(communicate.save(output_file_path))
+            except RuntimeError:
+                asyncio.run(communicate.save(output_file_path))
+
+            logger.info(f"[SynthesizeSpeechTool] Audio saved to {output_file_path}")
+            return {"status": "success", "output": f"Speech synthesized and saved to {output_file_path}"}
+        except ImportError:
+            return {"status": "error", "output": "edge_tts package not installed. Run: pip install edge-tts"}
+        except Exception as e:
+            logger.error(f"[SynthesizeSpeechTool] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Speech synthesis failed: {e}"}
+
+
+class TranscribeVoiceTool(BaseTool):
+    """Transcribes audio using Google Cloud STT if available, otherwise returns an error."""
+
+    def __init__(self):
+        super().__init__(
+            name="transcribe_voice",
+            description=(
+                "Transcribes audio from a WAV file to text. "
+                "Requires 'audio_file_path'. Optional: 'language' (default 'en-US'). "
+                "Uses Google Cloud Speech-to-Text if credentials are configured."
+            )
+        )
+
+    def run(self, audio_file_path: str, language: str = "en-US", **kwargs) -> Dict[str, Any]:
+        if not os.path.exists(audio_file_path):
+            return {"status": "error", "output": f"Audio file not found: {audio_file_path}"}
+
+        try:
+            from google.cloud import speech
+
+            client = speech.SpeechClient()
+            with open(audio_file_path, "rb") as f:
+                content = f.read()
+
+            audio = speech.RecognitionAudio(content=content)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
+                language_code=language,
+            )
+
+            response = client.recognize(config=config, audio=audio)
+            transcript = " ".join(
+                result.alternatives[0].transcript for result in response.results
+            )
+
+            logger.info(f"[TranscribeVoiceTool] Transcription: '{transcript.strip()}'")
+            return {"status": "success", "output": transcript.strip() or "(no speech detected)"}
+
+        except ImportError:
+            return {"status": "error", "output": "Google Cloud Speech library not installed. Run: pip install google-cloud-speech"}
+        except Exception as e:
+            logger.error(f"[TranscribeVoiceTool] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Transcription failed: {e}"}
+
+
+class ColdCallTool(BaseTool):
+    """Orchestrates a cold call: synthesizes speech, makes the call via Twilio."""
+
+    def __init__(self):
+        super().__init__(
+            name="cold_call",
+            description=(
+                "Executes a cold call sequence: synthesizes a script with TTS, "
+                "then calls the number via Twilio and speaks the message. "
+                "Requires 'phone_number' and 'call_script' (the text to speak). "
+                "Optional: 'contact_name', 'voice' (Twilio voice, default 'alice')."
+            )
+        )
+
+    def run(self, phone_number: str, call_script: str, contact_name: str = "Unknown",
+            voice: str = "alice", **kwargs) -> Dict[str, Any]:
+        if not phone_number:
+            return {"status": "error", "output": "phone_number is required."}
+        if not call_script:
+            return {"status": "error", "output": "call_script is required."}
+
+        logger.info(f"[ColdCallTool] Starting cold call to {contact_name} ({phone_number})")
+
+        # Use MakePhoneCallTool to place the call with the script
+        call_tool = MakePhoneCallTool()
+        result = call_tool.run(to_number=phone_number, message=call_script, voice=voice)
+
+        if result["status"] == "success":
+            return {
+                "status": "success",
+                "output": f"Cold call to {contact_name} ({phone_number}) initiated. {result['output']}",
+                "call_sid": result.get("call_sid")
+            }
+        else:
+            return {
+                "status": "error",
+                "output": f"Cold call to {contact_name} failed: {result['output']}"
+            }
