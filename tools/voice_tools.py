@@ -279,3 +279,91 @@ class ColdCallTool(BaseTool):
                 "status": "error",
                 "output": f"Cold call to {contact_name} failed: {result['output']}"
             }
+
+
+# GibberLink verbal passphrase for AI-to-AI detection on phone calls
+GIBBERLINK_PASSPHRASE = "GibberLink protocol active"
+GIBBERLINK_CONFIRM = "GibberLink confirmed"
+
+
+class GibberLinkCallTool(BaseTool):
+    """Makes a phone call with GibberLink AI detection — speaks a message,
+    then listens for the AI passphrase to detect if the other side is AI."""
+
+    def __init__(self):
+        super().__init__(
+            name="gibberlink_call",
+            description=(
+                "Makes a phone call with GibberLink AI-to-AI detection. "
+                "Speaks your message, then says the GibberLink passphrase and listens. "
+                "If the other side is also an AI with GibberLink, it will respond with "
+                "the confirmation phrase and both sides switch to compressed protocol. "
+                "Requires 'to_number' and 'message'. "
+                "Optional: 'voice' (default 'alice'), 'webhook_url' (for receiving the response)."
+            )
+        )
+
+    def run(self, to_number: str, message: str, voice: str = "alice",
+            webhook_url: str = None, **kwargs) -> Dict[str, Any]:
+        account_sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
+        auth_token = os.environ.get("TWILIO_AUTH_TOKEN", "")
+        from_number = os.environ.get("TWILIO_PHONE_NUMBER", "")
+
+        if not account_sid or not auth_token:
+            return {"status": "error", "output": "Twilio credentials not configured."}
+        if not from_number:
+            return {"status": "error", "output": "TWILIO_PHONE_NUMBER not configured."}
+        if not to_number:
+            return {"status": "error", "output": "to_number is required."}
+
+        try:
+            from twilio.rest import Client
+            from twilio.twiml.voice_response import VoiceResponse, Gather
+
+            client = Client(account_sid, auth_token)
+
+            twiml = VoiceResponse()
+
+            # Step 1: Speak the actual message
+            twiml.say(message, voice=voice)
+
+            # Step 2: Speak the GibberLink passphrase and listen for a response
+            # If the other side is AI with GibberLink, it will say the confirm phrase
+            gather = Gather(
+                input='speech',
+                speechTimeout='3',
+                timeout=5,
+                action=webhook_url or '/gibberlink-response',
+                method='POST'
+            )
+            gather.say(
+                f"By the way, {GIBBERLINK_PASSPHRASE}.",
+                voice=voice
+            )
+            twiml.append(gather)
+
+            # Step 3: If no response detected (human or no GibberLink), just end
+            twiml.say("Thank you, goodbye.", voice=voice)
+
+            call = client.calls.create(
+                to=to_number,
+                from_=from_number,
+                twiml=str(twiml)
+            )
+
+            logger.info(f"[GibberLinkCall] Call initiated with AI detection: SID={call.sid}, to={to_number}")
+            return {
+                "status": "success",
+                "output": (
+                    f"GibberLink call initiated to {to_number}. Call SID: {call.sid}. "
+                    f"The call will speak your message, then say the GibberLink passphrase. "
+                    f"If the other side is AI, they will respond with the confirmation."
+                ),
+                "call_sid": call.sid,
+                "gibberlink_detection": "pending"
+            }
+        except ImportError:
+            return {"status": "error", "output": "twilio package not installed. Run: pip install twilio"}
+        except Exception as e:
+            logger.error(f"[GibberLinkCall] Error: {e}", exc_info=True)
+            return {"status": "error", "output": f"Failed to make GibberLink call: {e}"}

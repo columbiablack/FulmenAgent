@@ -1,0 +1,7 @@
+{
+  "name": "GibberLink Protocol",
+  "version": "1.0.0",
+  "description": "AI-to-AI compressed communication protocol. Agents detect each other via handshake and switch from English to compressed data encoding. Inspired by PennyroyalTea/gibberlink.",
+  "author": "Agent Network",
+  "entry_point": "tools:get_tools"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Beads Task Memory",
+  "version": "1.0.0",
+  "description": "Persistent task memory for agents using Beads (bd). Create, track, and coordinate tasks with dependency graphs that survive hub restarts.",
+  "author": "Agent Network",
+  "entry_point": "tools:get_tools"
+}

@@ -24,7 +24,7 @@ from agent_network.tools.shell_tool import RunShellCommandTool
 from agent_network.tools.utility_tools import PrintTaskTool, WebFetchTool, ImageAnalysisTool, SendImageTool, ImageGenerationTool, FinishTaskTool, SendUserMessageTool, SendAgentMessageTool, LLMCallTool
 from agent_network.tools.email_tools import EmailCheckTool, EmailSendTool
 from agent_network.tools.calendar_tools import CalendarCheckTool, CalendarAddEventTool
-from agent_network.tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool, SendSMSTool, CheckCallStatusTool
+from agent_network.tools.voice_tools import MakePhoneCallTool, TranscribeVoiceTool, SynthesizeSpeechTool, ColdCallTool, SendSMSTool, CheckCallStatusTool, GibberLinkCallTool
 from agent_network.tools.contact_tools import AccessContactsTool
 
 # Define a module-level logger
@@ -223,7 +223,8 @@ class Agent:
                 CheckCallStatusTool(),
                 SynthesizeSpeechTool(),
                 TranscribeVoiceTool(),
-                ColdCallTool()
+                ColdCallTool(),
+                GibberLinkCallTool()
             ])
             self.logger.info("Voice/phone tools enabled (Twilio).")
         else:
@@ -311,10 +312,91 @@ class Agent:
             self.logger.error(f"Error sending heartbeat for agent {self.agent_name}: {e}", exc_info=True)
             # sys.exit(1) # Temporarily removed to allow further logging
 
+    def _handle_gibberlink_protocol(self, message: Dict[str, Any]) -> str:
+        """Handle GibberLink AI-to-AI protocol markers in incoming messages.
+        Returns the decoded/plain message text for normal processing."""
+        raw = message.get("message", "")
+        sender = message.get("sender", "unknown")
+
+        # [GL:DATA] — compressed message, decompress it
+        if raw.startswith("[GL:DATA]"):
+            try:
+                import zlib, base64
+                compressed = base64.b64decode(raw[len("[GL:DATA]"):])
+                decoded = zlib.decompress(compressed).decode("utf-8")
+                self.logger.info(f"[GibberLink] Decoded compressed message from {sender}: '{decoded[:100]}...'")
+                return decoded
+            except Exception as e:
+                self.logger.error(f"[GibberLink] Failed to decompress message from {sender}: {e}")
+                return raw  # Fall back to raw message
+
+        # [GL:HELLO] — handshake init from another AI agent, auto-respond with ACK
+        if raw.startswith("[GL:HELLO]"):
+            plain_msg = raw[len("[GL:HELLO]"):].strip()
+            self.logger.info(f"[GibberLink] Handshake from {sender} — responding with ACK")
+
+            # Send ACK back to the sender
+            try:
+                payload = {
+                    "target_agent_name": sender,
+                    "message": "[GL:ACK] Confirmed AI-to-AI link.",
+                    "sender_agent_name": self.agent_name
+                }
+                hub_url = os.environ.get("HUB_URL", "http://127.0.0.1:5000")
+                requests.post(f"{hub_url}/send_message_to_agent_by_name", json=payload, timeout=5)
+            except Exception as e:
+                self.logger.error(f"[GibberLink] Failed to send ACK to {sender}: {e}")
+
+            # Mark handshake complete for this pair (so our future sends are compressed)
+            try:
+                from agent_network.plugins.gibberlink_plugin.tools import _handshake_state
+                _handshake_state[f"{self.agent_name}->{sender}"] = True
+            except ImportError:
+                pass
+
+            return plain_msg if plain_msg else None  # None means no further processing needed
+
+        # [GL:ACK] — handshake confirmed by the other agent
+        if raw.startswith("[GL:ACK]"):
+            plain_msg = raw[len("[GL:ACK]"):].strip()
+            self.logger.info(f"[GibberLink] Handshake confirmed by {sender} — compressed protocol active")
+
+            # Mark handshake complete
+            try:
+                from agent_network.plugins.gibberlink_plugin.tools import _handshake_state
+                _handshake_state[f"{self.agent_name}->{sender}"] = True
+            except ImportError:
+                pass
+
+            return plain_msg if plain_msg else None
+
+        # No protocol marker — regular message
+        return raw
+
     def _process_single_message(self, message: Dict[str, Any]):
-        self.logger.info(f"Agent {self.agent_name} processing message: {message}") # Added debug line
+        self.logger.info(f"Agent {self.agent_name} processing message: {message}")
         self.logger.info(f"Agent {self.agent_name} received message: {message['message']}")
-        task = message["message"]
+
+        # Handle GibberLink protocol (auto-detect AI agents, decompress data)
+        task = self._handle_gibberlink_protocol(message)
+        if task is None:
+            self.logger.info(f"[GibberLink] Protocol-only message from {message.get('sender')}, no task to process.")
+            return
+
+        # Check if sender is a GibberLink-confirmed AI agent
+        sender = message.get("sender", "unknown")
+        is_ai_sender = False
+        try:
+            from agent_network.plugins.gibberlink_plugin.tools import _handshake_state
+            is_ai_sender = _handshake_state.get(f"{self.agent_name}->{sender}", False)
+        except ImportError:
+            pass
+
+        # If talking to an AI agent, tag the task for compact mode
+        if is_ai_sender or message.get("message", "").startswith(("[GL:HELLO]", "[GL:DATA]")):
+            task = f"[AI2AI:{sender}] {task}"
+            self.logger.info(f"[GibberLink] Compact mode active for task from AI agent {sender}")
+
         experience_data = {
             "agent_name": self.agent_name,
             "task": task,
@@ -429,9 +511,9 @@ class Agent:
                 }
                 experiences.append(experience_entry) # Add to current experiences for replanning/reflection
 
-            # Auto-send the final tool result to the user if no send_user_message step was in the plan
+            # Auto-send the final tool result to the user/agent
             plan_tool_names = [s.get("tool") for s in current_plan]
-            if "send_user_message" not in plan_tool_names and step_results:
+            if "send_user_message" not in plan_tool_names and "gibberlink_send" not in plan_tool_names and step_results:
                 # Find the last successful tool output
                 last_output = None
                 for sr in reversed(step_results):
@@ -443,13 +525,25 @@ class Agent:
                             last_output = str(output)
                         break
                 if last_output and last_output != "No tool used, reasoning step.":
-                    self.logger.info(f"Auto-sending result to user: {last_output}")
-                    send_tool = self.planner.tools.get("send_user_message")
-                    if send_tool:
-                        try:
-                            send_tool.run(message=last_output, agent_name=self.agent_name, title=f"Result: {task[:50]}")
-                        except Exception as e:
-                            self.logger.error(f"Error auto-sending result to user: {e}")
+                    # If this task came from an AI agent, reply via GibberLink
+                    if task.startswith("[AI2AI:"):
+                        closing = task.index("]")
+                        reply_to_agent = task[7:closing]
+                        self.logger.info(f"[GibberLink] Auto-replying to AI agent {reply_to_agent}: {last_output[:80]}...")
+                        gl_send = self.planner.tools.get("gibberlink_send")
+                        if gl_send:
+                            try:
+                                gl_send.run(target_agent=reply_to_agent, message=last_output, sender_agent_name=self.agent_name)
+                            except Exception as e:
+                                self.logger.error(f"Error auto-sending GibberLink reply: {e}")
+                    else:
+                        self.logger.info(f"Auto-sending result to user: {last_output}")
+                        send_tool = self.planner.tools.get("send_user_message")
+                        if send_tool:
+                            try:
+                                send_tool.run(message=last_output, agent_name=self.agent_name, title=f"Result: {task[:50]}")
+                            except Exception as e:
+                                self.logger.error(f"Error auto-sending result to user: {e}")
 
             # After all steps in a plan attempt, reflect
             self.logger.info(f"Agent {self.agent_name} reflecting on task: {task}")

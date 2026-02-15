@@ -256,9 +256,29 @@ class Planner:
         # Build tool descriptions so the LLM knows what each tool does and how to call it
         tool_descriptions = "\n".join([f"  - {tool.name}: {tool.description}" for tool in self.tools.values()])
 
+        # Detect AI-to-AI compact mode
+        ai2ai_mode = False
+        ai2ai_sender = ""
+        clean_task = task
+        if task.startswith("[AI2AI:"):
+            ai2ai_mode = True
+            closing = task.index("]")
+            ai2ai_sender = task[7:closing]
+            clean_task = task[closing+2:]  # Strip the tag
+            self.logger.info(f"[GibberLink] Compact planning mode for AI sender: {ai2ai_sender}")
+
+        compact_rules = ""
+        if ai2ai_mode:
+            compact_rules = """
+- COMPACT MODE: You are talking to another AI agent. Save tokens:
+  - Use shorthand in all outputs: "temp:45.2F|sky:ptly_cld|hum:78%" not full sentences.
+  - Use gibberlink_send to reply (auto-compresses). Target: """ + ai2ai_sender + """
+  - Keep tool args minimal. No filler words.
+  - If using send_user_message or gibberlink_send, keep the message under 50 words using key:value pairs."""
+
         prompt = f"""You are an AI agent. Create a simple plan for this task.
 
-TASK: {task}
+TASK: {clean_task}
 
 Available tools:
 {tool_descriptions}
@@ -266,12 +286,12 @@ Available tools:
 RULES:
 - Create only 1 step for simple tasks.
 - For weather tasks, use "weather_tool" with the EXACT location from the task.
-- Respond with ONLY a JSON object.
+- Respond with ONLY a JSON object.{compact_rules}
 
 Example response:
 {{
     "plan": [
-        {{"goal": "Get current temperature for {task}", "tool": "weather_tool", "args": {{"action": {{"type": "current_temp", "location": "{task}"}}}}}}
+        {{"goal": "Get current temperature for {clean_task}", "tool": "weather_tool", "args": {{"action": {{"type": "current_temp", "location": "{clean_task}"}}}}}}
     ]
 }}"""
         

@@ -9,9 +9,12 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 from twilio.rest import Client as TwilioClient
 
 from agent_network.connectors.base_connector import BaseConnector
-from agent_network.tools.voice_tools import SynthesizeSpeechTool, TranscribeVoiceTool # Import the tools
+from agent_network.tools.voice_tools import SynthesizeSpeechTool, TranscribeVoiceTool, GIBBERLINK_PASSPHRASE, GIBBERLINK_CONFIRM
 
 logger = logging.getLogger(__name__)
+
+# Track which call SIDs have completed the GibberLink handshake
+_gibberlink_calls = {}
 
 # Load Twilio credentials from environment variables
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
@@ -56,13 +59,49 @@ class VoiceConnector(BaseConnector):
         # In a real app, use Twilio Sync or a database for persistent state
         if input_received:
             self.logger.info(f"Speech/Input result from Twilio for {agent_name}: '{input_received}' (CallSid: {call_sid})")
-            
+
+            # GibberLink detection: check if the caller said the passphrase
+            input_lower = input_received.lower().strip()
+            passphrase_lower = GIBBERLINK_PASSPHRASE.lower()
+            confirm_lower = GIBBERLINK_CONFIRM.lower()
+
+            if passphrase_lower in input_lower:
+                # The other side is an AI agent! Respond with confirmation
+                self.logger.info(f"[GibberLink] AI detected on call {call_sid}! Passphrase heard: '{input_received}'")
+                _gibberlink_calls[call_sid] = True
+                response.say(f"{GIBBERLINK_CONFIRM}. Switching to compressed protocol.")
+
+                # Continue listening — future messages from this caller are AI-to-AI
+                gather = Gather(input='speech', speechTimeout='auto', action='/twilio-webhook', method='POST')
+                gather.say("Ready for compressed communication.")
+                response.append(gather)
+                return str(response)
+
+            if confirm_lower in input_lower:
+                # We heard the confirmation back — handshake complete from our side too
+                self.logger.info(f"[GibberLink] Handshake confirmed on call {call_sid}!")
+                _gibberlink_calls[call_sid] = True
+                response.say("GibberLink link established. Proceeding.")
+                gather = Gather(input='speech', speechTimeout='auto', action='/twilio-webhook', method='POST')
+                response.append(gather)
+                return str(response)
+
+            # Check if this is a GibberLink-active call (AI-to-AI)
+            is_gibberlink = _gibberlink_calls.get(call_sid, False)
+            if is_gibberlink:
+                self.logger.info(f"[GibberLink] AI-to-AI message on call {call_sid}: '{input_received}'")
+
             # Pass the speech result to the agent
-            # Use asyncio.run to execute the async agent processing in this synchronous Flask route
             try:
-                # The agent's process_user_message needs to be adapted to return a text response
-                # For now, simulate a response or ensure the agent method exists and returns a string
-                agent_response_text = asyncio.run(self.agent.process_connector_message(input_received, context={'call_sid': call_sid, 'source': 'voice', 'from_number': request.form.get('From')}))
+                agent_response_text = asyncio.run(self.agent.process_connector_message(
+                    input_received,
+                    context={
+                        'call_sid': call_sid,
+                        'source': 'voice',
+                        'from_number': request.form.get('From'),
+                        'gibberlink_active': is_gibberlink
+                    }
+                ))
                 self.logger.info(f"Agent '{agent_name}' responded with: '{agent_response_text}'")
             except Exception as e:
                 self.logger.error(f"Error processing message with agent '{agent_name}': {e}", exc_info=True)
@@ -76,24 +115,47 @@ class VoiceConnector(BaseConnector):
             # Continue gathering input for multi-turn conversation
             gather = Gather(input='speech', speechTimeout='auto', action='/twilio-webhook', method='POST')
             response.append(gather)
-            response.say("I didn't hear anything. Please try again.") # If no speech is detected after gather
+            response.say("I didn't hear anything. Please try again.")
         else:
-            # Initial greeting or no speech detected in a subsequent turn
-            greeting_text = "Hello, I am your agent, " + agent_name + ". How can I help you today?"
+            # Initial greeting — include GibberLink passphrase for AI detection
+            greeting_text = (
+                f"Hello, I am your agent, {agent_name}. How can I help you today? "
+                f"By the way, {GIBBERLINK_PASSPHRASE}."
+            )
             response.say(greeting_text)
-            
+
             # Gather speech input after greeting
             gather = Gather(input='speech', speechTimeout='auto', action='/twilio-webhook', method='POST')
             response.append(gather)
-            response.say("I didn't hear anything. Please try again.") # If no speech is detected after gather
+            response.say("I didn't hear anything. Please try again.")
         
         return str(response)
 
-    def _register_routes(self):
-        # Register the webhook handler function manually
-        self.app.add_url_rule("/twilio-webhook", "twilio_webhook", self._twilio_webhook_handler, methods=["POST"])
+    def _gibberlink_response_handler(self):
+        """Handles the callback from a GibberLink outbound call's <Gather>."""
+        response = VoiceResponse()
+        call_sid = request.form.get('CallSid')
+        speech_result = request.form.get('SpeechResult', '')
 
-        # Removed the /audio/<filename> route as we are using response.say() now.
+        self.logger.info(f"[GibberLink] Response on call {call_sid}: '{speech_result}'")
+
+        if GIBBERLINK_CONFIRM.lower() in speech_result.lower():
+            self.logger.info(f"[GibberLink] AI DETECTED on outbound call {call_sid}! Handshake complete.")
+            _gibberlink_calls[call_sid] = True
+            response.say("GibberLink link established. Switching to compressed protocol.")
+            # Continue with AI-to-AI conversation
+            gather = Gather(input='speech', speechTimeout='auto', action='/twilio-webhook', method='POST')
+            gather.say("Ready.")
+            response.append(gather)
+        else:
+            self.logger.info(f"[GibberLink] No AI detected on call {call_sid}. Human on the line.")
+            response.say("Thank you, goodbye.")
+
+        return str(response)
+
+    def _register_routes(self):
+        self.app.add_url_rule("/twilio-webhook", "twilio_webhook", self._twilio_webhook_handler, methods=["POST"])
+        self.app.add_url_rule("/gibberlink-response", "gibberlink_response", self._gibberlink_response_handler, methods=["POST"])
 
     def _run_flask_app(self):
         # Use a silent reloader or disable it for production.

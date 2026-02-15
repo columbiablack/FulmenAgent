@@ -1,0 +1,2 @@
+# Beads uses the bd CLI (installed via: npm install -g @beads/bd)
+# No Python pip dependencies needed.
