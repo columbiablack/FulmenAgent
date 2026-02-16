@@ -222,7 +222,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Agent Network Dashboard</h1>
+        <h1>Agent Network Dashboard <span id="version-badge" style="font-size: 0.45em; background: #333; color: #aaa; padding: 3px 10px; border-radius: 12px; vertical-align: middle; cursor: pointer;" onclick="openTab(event, 'settings-tab')" title="Click to check for updates">v...</span></h1>
         <p>Last updated: <span id="current-time"></span></p>
         <button id="shutdown-hub-button" class="shutdown-btn">Shutdown Hub</button>
         <button id="reset-hub-button" class="shutdown-btn" style="background-color: #e67e22;">Reset Hub</button>
@@ -478,6 +478,15 @@
                     </p>
                                         <button type="submit">Save Settings</button>
                 </form>
+
+                <div style="margin-top: 30px; padding: 20px; border: 1px solid #444; border-radius: 8px; background: #1a1a2e;">
+                    <h3 style="margin-top: 0;">Software Updates</h3>
+                    <p style="color: #aaa; font-size: 0.9em;">Current version: <strong id="update-current-version">...</strong> (<span id="update-current-commit">...</span>) on branch <span id="update-branch">...</span></p>
+                    <div id="update-status" style="margin: 12px 0; padding: 10px; border-radius: 6px; display: none;"></div>
+                    <div id="update-commits" style="margin: 12px 0; max-height: 200px; overflow-y: auto; display: none;"></div>
+                    <button type="button" id="check-updates-btn" onclick="checkForUpdates()" style="padding: 8px 16px; cursor: pointer; margin-right: 8px;">Check for Updates</button>
+                    <button type="button" id="do-update-btn" onclick="performUpdate()" style="padding: 8px 16px; cursor: pointer; background: #27ae60; color: white; border: none; border-radius: 4px; display: none;">Update Now</button>
+                </div>
             </div>
         </div>
 
@@ -661,6 +670,131 @@
             } catch (error) {
                 console.error('Error fetching HuggingFace models:', error);
                 select.innerHTML = '<option value="">-- Failed to load models --</option>';
+            }
+        }
+
+        // --- Software Update Functions ---
+        async function checkVersionBadge() {
+            try {
+                const response = await fetch('/api/version');
+                const data = await response.json();
+                const badge = document.getElementById('version-badge');
+                if (data.status === 'success') {
+                    if (data.update_available) {
+                        badge.textContent = `v${data.version} (${data.commits_behind} update${data.commits_behind > 1 ? 's' : ''})`;
+                        badge.style.background = '#e67e22';
+                        badge.style.color = '#fff';
+                    } else {
+                        badge.textContent = `v${data.version}`;
+                        badge.style.background = '#27ae60';
+                        badge.style.color = '#fff';
+                    }
+                }
+            } catch (e) {
+                console.error('Version check failed:', e);
+            }
+        }
+
+        async function checkForUpdates() {
+            const btn = document.getElementById('check-updates-btn');
+            const statusDiv = document.getElementById('update-status');
+            const commitsDiv = document.getElementById('update-commits');
+            const updateBtn = document.getElementById('do-update-btn');
+
+            btn.textContent = 'Checking...';
+            btn.disabled = true;
+            statusDiv.style.display = 'none';
+            commitsDiv.style.display = 'none';
+            updateBtn.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/version');
+                const data = await response.json();
+
+                document.getElementById('update-current-version').textContent = data.version || 'unknown';
+                document.getElementById('update-current-commit').textContent = data.current_commit || '?';
+                document.getElementById('update-branch').textContent = data.branch || '?';
+
+                statusDiv.style.display = 'block';
+
+                if (data.update_available) {
+                    statusDiv.style.background = '#2d2d0f';
+                    statusDiv.style.border = '1px solid #e67e22';
+                    statusDiv.innerHTML = `<strong>${data.commits_behind} update${data.commits_behind > 1 ? 's' : ''} available</strong> (latest: ${data.latest_commit})`;
+
+                    if (data.commit_messages && data.commit_messages.length > 0) {
+                        commitsDiv.style.display = 'block';
+                        commitsDiv.innerHTML = '<strong style="font-size:0.9em;">New commits:</strong><ul style="margin:5px 0;padding-left:20px;font-size:0.85em;color:#ccc;">' +
+                            data.commit_messages.map(m => `<li>${m}</li>`).join('') + '</ul>';
+                    }
+
+                    updateBtn.style.display = 'inline-block';
+                } else {
+                    statusDiv.style.background = '#0f2d0f';
+                    statusDiv.style.border = '1px solid #27ae60';
+                    statusDiv.innerHTML = '<strong>You are up to date!</strong>';
+                }
+
+                // Also refresh the header badge
+                checkVersionBadge();
+            } catch (error) {
+                statusDiv.style.display = 'block';
+                statusDiv.style.background = '#2d0f0f';
+                statusDiv.style.border = '1px solid #e74c3c';
+                statusDiv.innerHTML = `<strong>Error checking for updates:</strong> ${error.message}`;
+            }
+
+            btn.textContent = 'Check for Updates';
+            btn.disabled = false;
+        }
+
+        async function performUpdate() {
+            if (!confirm('This will:\n1. Stop all running agents\n2. Pull the latest code from GitHub\n3. Reinstall dependencies\n4. Restart the hub\n\nContinue?')) {
+                return;
+            }
+
+            const statusDiv = document.getElementById('update-status');
+            const updateBtn = document.getElementById('do-update-btn');
+            const checkBtn = document.getElementById('check-updates-btn');
+
+            updateBtn.disabled = true;
+            updateBtn.textContent = 'Updating...';
+            checkBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/update', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    statusDiv.style.background = '#0f2d0f';
+                    statusDiv.style.border = '1px solid #27ae60';
+                    statusDiv.innerHTML = `<strong>${data.message}</strong><br><span style="font-size:0.9em;color:#aaa;">Page will reload automatically...</span>`;
+                    updateBtn.style.display = 'none';
+
+                    // Wait for the hub to restart, then reload
+                    setTimeout(function waitForHub() {
+                        fetch('/api/version').then(() => {
+                            window.location.reload();
+                        }).catch(() => {
+                            setTimeout(waitForHub, 2000);
+                        });
+                    }, 4000);
+                } else {
+                    statusDiv.style.background = '#2d0f0f';
+                    statusDiv.style.border = '1px solid #e74c3c';
+                    statusDiv.innerHTML = `<strong>Update failed:</strong> ${data.message}` +
+                        (data.hint ? `<br><span style="font-size:0.85em;color:#aaa;">${data.hint}</span>` : '');
+                    updateBtn.disabled = false;
+                    updateBtn.textContent = 'Update Now';
+                    checkBtn.disabled = false;
+                }
+            } catch (error) {
+                statusDiv.style.background = '#2d0f0f';
+                statusDiv.style.border = '1px solid #e74c3c';
+                statusDiv.innerHTML = `<strong>Update error:</strong> ${error.message}`;
+                updateBtn.disabled = false;
+                updateBtn.textContent = 'Update Now';
+                checkBtn.disabled = false;
             }
         }
 
@@ -1177,6 +1311,7 @@
             fetchAndDisplayTokenUsage();
             fetchAndDisplayPlugins();
             fetchAutoInstallDepsStatus();
+            checkVersionBadge();
 
             // Polling for dynamic data
             setInterval(fetchAndDisplayAgents, 10000);

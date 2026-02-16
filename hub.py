@@ -17,6 +17,7 @@ import shutil # NEW: For directory operations (e.g., rmtree)
 from werkzeug.utils import secure_filename # NEW: For securing uploaded filenames
 from pathlib import Path # NEW: For path manipulation
 import requests # IMPORTED: Add requests for HTTP communication
+import subprocess as _subprocess  # For update system git/pip commands
 
 # Configure logging for the hub
 log_file_path = os.path.join(os.path.dirname(__file__), "agent_debug.log")
@@ -789,6 +790,141 @@ def reset_hub():
 
     logger.info(f"Hub reset complete. Killed {killed} agents, cleared all memory.")
     return jsonify({"status": "success", "message": f"Hub reset. Killed {killed} agent(s), cleared all data."}), 200
+
+
+# ─── Software Update System ───
+
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))  # agent_network/ (where .git lives)
+
+def _get_current_version():
+    """Read __version__ from __init__.py at import time and after updates."""
+    try:
+        init_path = os.path.join(_REPO_DIR, "__init__.py")
+        with open(init_path, "r") as f:
+            for line in f:
+                if line.startswith("__version__"):
+                    return line.split("=")[1].strip().strip("'\"")
+    except Exception:
+        pass
+    return "unknown"
+
+def _git(args, timeout=30):
+    """Run a git command in the repo directory and return (success, stdout, stderr)."""
+    try:
+        result = _subprocess.run(
+            ["git"] + args,
+            capture_output=True, text=True, timeout=timeout, cwd=_REPO_DIR
+        )
+        return result.returncode == 0, result.stdout.strip(), result.stderr.strip()
+    except Exception as e:
+        return False, "", str(e)
+
+@app.route("/api/version", methods=["GET"])
+def api_version():
+    """Check current version and whether updates are available."""
+    version = _get_current_version()
+
+    # Get current commit
+    ok, current_hash, _ = _git(["rev-parse", "--short", "HEAD"])
+    current_commit = current_hash if ok else "unknown"
+
+    # Get current branch
+    ok, branch, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    branch = branch if ok else "develop"
+
+    # Fetch latest from remote (non-destructive)
+    _git(["fetch", "origin"], timeout=15)
+
+    # Count commits behind
+    ok, log_output, _ = _git(["log", f"HEAD..origin/{branch}", "--oneline"])
+    commits = [line for line in log_output.split("\n") if line.strip()] if ok and log_output else []
+    commits_behind = len(commits)
+
+    # Get latest remote commit hash
+    ok, latest_hash, _ = _git(["rev-parse", "--short", f"origin/{branch}"])
+    latest_commit = latest_hash if ok else "unknown"
+
+    return jsonify({
+        "status": "success",
+        "version": version,
+        "branch": branch,
+        "current_commit": current_commit,
+        "latest_commit": latest_commit,
+        "commits_behind": commits_behind,
+        "update_available": commits_behind > 0,
+        "commit_messages": commits[:20]  # Cap at 20 for the UI
+    }), 200
+
+@app.route("/api/update", methods=["POST"])
+def api_update():
+    """Pull latest code from GitHub, reinstall deps, and restart the hub."""
+    logger.info("Software update requested via dashboard.")
+
+    # 1. Kill all running agents
+    killed = 0
+    for agent_name, pid in list(launched_agent_processes.items()):
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            logger.info(f"Update: Terminated agent '{agent_name}' (PID: {pid})")
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.error(f"Update: Error killing agent '{agent_name}' (PID: {pid}): {e}")
+    launched_agent_processes.clear()
+    logger.info(f"Update: Killed {killed} agent(s).")
+
+    # 2. Get current branch
+    ok, branch, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"])
+    branch = branch if ok else "develop"
+
+    # 3. Pull latest code
+    ok, pull_out, pull_err = _git(["pull", "origin", branch], timeout=60)
+    if not ok:
+        error_msg = pull_err or pull_out or "Unknown git pull error"
+        logger.error(f"Update: git pull failed: {error_msg}")
+        return jsonify({
+            "status": "error",
+            "message": f"Git pull failed: {error_msg}",
+            "hint": "You may have local changes. Try: git stash && git pull"
+        }), 500
+
+    logger.info(f"Update: git pull succeeded: {pull_out}")
+
+    # 4. Reinstall dependencies
+    req_path = os.path.join(_REPO_DIR, "requirements.txt")
+    if os.path.exists(req_path):
+        try:
+            pip_result = _subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", req_path, "-q"],
+                capture_output=True, text=True, timeout=120, cwd=_REPO_DIR
+            )
+            if pip_result.returncode != 0:
+                logger.warning(f"Update: pip install had issues: {pip_result.stderr}")
+            else:
+                logger.info("Update: Dependencies reinstalled successfully.")
+        except Exception as e:
+            logger.warning(f"Update: pip install failed: {e}")
+
+    # 5. Read new version
+    new_version = _get_current_version()
+    logger.info(f"Update: New version is {new_version}")
+
+    # 6. Schedule restart (give time for the response to be sent)
+    def _restart():
+        time.sleep(2)
+        logger.info("Update: Restarting hub process...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    threading.Thread(target=_restart, daemon=True).start()
+
+    return jsonify({
+        "status": "success",
+        "message": f"Updated to {new_version}. Hub is restarting...",
+        "new_version": new_version,
+        "git_output": pull_out
+    }), 200
+
 
 import subprocess
 
