@@ -32,8 +32,8 @@ This project implements a multi-agent network designed for autonomous task execu
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/FulMen-Agent-Network.git # Replace with actual repo URL
-cd FulMen-Agent-Network
+git clone https://github.com/mateable/FulmenAgent.git
+cd FulmenAgent
 ```
 
 ### 2. Python Environment
