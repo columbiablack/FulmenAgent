@@ -18,6 +18,9 @@ from werkzeug.utils import secure_filename # NEW: For securing uploaded filename
 from pathlib import Path # NEW: For path manipulation
 import requests # IMPORTED: Add requests for HTTP communication
 import subprocess as _subprocess  # For update system git/pip commands
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 # Configure logging for the hub
 log_file_path = os.path.join(os.path.dirname(__file__), "agent_debug.log")
@@ -48,7 +51,8 @@ hub_memory = {
     },
     "global_plugin_preferences": {}, # NEW: To store global enable/disable status for plugins
     "global_auto_install_deps": True, # NEW: Global setting for auto-installing plugin dependencies
-    "discovered_plugins": {} # NEW: To store details of all plugins found in the plugins directory
+    "discovered_plugins": {}, # NEW: To store details of all plugins found in the plugins directory
+    "scheduled_tasks": [] # Scheduled/cron tasks (persisted to scheduled_tasks.json)
 }
 
 launched_agent_processes = {}
@@ -116,6 +120,76 @@ def _discover_all_plugins():
 
 # Initial plugin discovery when the hub starts
 _discover_all_plugins()
+
+# ─── Scheduled Tasks System ───
+
+_scheduler = BackgroundScheduler()
+_scheduler.start()
+atexit.register(lambda: _scheduler.shutdown(wait=False))
+
+SCHEDULED_TASKS_FILE = os.path.join(os.path.dirname(__file__), "scheduled_tasks.json")
+
+def _execute_scheduled_task(task_id, agent_name, task_message):
+    """APScheduler callback — drops a message into the agent's queue."""
+    logger.info(f"[Scheduler] Firing task '{task_id}' for agent '{agent_name}': {task_message[:80]}")
+    if agent_name not in hub_memory["agent_message_queues"]:
+        hub_memory["agent_message_queues"][agent_name] = []
+    hub_memory["agent_message_queues"][agent_name].append({
+        "sender": "scheduler",
+        "message": task_message
+    })
+    # Update last_run
+    for t in hub_memory["scheduled_tasks"]:
+        if t["id"] == task_id:
+            t["last_run"] = time.time()
+            break
+    _save_scheduled_tasks()
+
+def _save_scheduled_tasks():
+    """Persist scheduled tasks to disk."""
+    try:
+        with open(SCHEDULED_TASKS_FILE, "w") as f:
+            json.dump(hub_memory["scheduled_tasks"], f, indent=2)
+    except Exception as e:
+        logger.error(f"[Scheduler] Error saving tasks: {e}")
+
+def _register_task_with_scheduler(task):
+    """Register a single task dict with APScheduler."""
+    try:
+        if task["schedule_type"] == "cron":
+            trigger = CronTrigger(
+                hour=int(task.get("cron_hour", 9)),
+                minute=int(task.get("cron_minute", 0)),
+                day_of_week=task.get("cron_days", "*")
+            )
+        else:
+            trigger = IntervalTrigger(seconds=int(task.get("interval_seconds", 3600)))
+
+        _scheduler.add_job(
+            _execute_scheduled_task,
+            trigger=trigger,
+            args=[task["id"], task["agent_name"], task["task_message"]],
+            id=task["id"],
+            name=f"{task['agent_name']}: {task['task_message'][:50]}",
+            replace_existing=True
+        )
+    except Exception as e:
+        logger.error(f"[Scheduler] Error registering task '{task['id']}': {e}")
+
+def _load_scheduled_tasks():
+    """Load tasks from disk and register them with APScheduler."""
+    if os.path.exists(SCHEDULED_TASKS_FILE):
+        try:
+            with open(SCHEDULED_TASKS_FILE, "r") as f:
+                hub_memory["scheduled_tasks"] = json.load(f)
+            for task in hub_memory["scheduled_tasks"]:
+                if task.get("enabled", True):
+                    _register_task_with_scheduler(task)
+            logger.info(f"[Scheduler] Loaded {len(hub_memory['scheduled_tasks'])} scheduled task(s) from disk.")
+        except Exception as e:
+            logger.error(f"[Scheduler] Error loading tasks: {e}")
+
+_load_scheduled_tasks()
 
 # -------------------- Routes --------------------
 
@@ -786,10 +860,97 @@ def reset_hub():
         "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
         "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}
     }
-    # Keep global_plugin_preferences, global_auto_install_deps, discovered_plugins
+    # Keep global_plugin_preferences, global_auto_install_deps, discovered_plugins, scheduled_tasks
 
     logger.info(f"Hub reset complete. Killed {killed} agents, cleared all memory.")
     return jsonify({"status": "success", "message": f"Hub reset. Killed {killed} agent(s), cleared all data."}), 200
+
+
+# ─── Scheduled Tasks API ───
+
+@app.route("/api/scheduled_tasks", methods=["GET"])
+def api_get_scheduled_tasks():
+    """List all scheduled tasks with next run time."""
+    tasks = []
+    for t in hub_memory["scheduled_tasks"]:
+        task_copy = dict(t)
+        # Get next run time from APScheduler
+        try:
+            job = _scheduler.get_job(t["id"])
+            if job and job.next_run_time:
+                task_copy["next_run"] = job.next_run_time.isoformat()
+            else:
+                task_copy["next_run"] = None
+        except Exception:
+            task_copy["next_run"] = None
+        tasks.append(task_copy)
+    return jsonify({"status": "success", "tasks": tasks}), 200
+
+@app.route("/api/scheduled_tasks", methods=["POST"])
+def api_create_scheduled_task():
+    """Create a new scheduled task."""
+    data = request.json
+    agent_name = data.get("agent_name")
+    task_message = data.get("task_message")
+    schedule_type = data.get("schedule_type", "interval")
+
+    if not agent_name or not task_message:
+        return jsonify({"status": "error", "message": "agent_name and task_message are required."}), 400
+
+    task_id = str(uuid.uuid4())[:8]
+
+    task_record = {
+        "id": task_id,
+        "agent_name": agent_name,
+        "task_message": task_message,
+        "schedule_type": schedule_type,
+        "enabled": True,
+        "created_at": time.time(),
+        "last_run": None
+    }
+
+    if schedule_type == "cron":
+        task_record["cron_hour"] = data.get("cron_hour", 9)
+        task_record["cron_minute"] = data.get("cron_minute", 0)
+        task_record["cron_days"] = data.get("cron_days", "*")
+    else:
+        task_record["interval_seconds"] = int(data.get("interval_hours", 6)) * 3600
+
+    hub_memory["scheduled_tasks"].append(task_record)
+    _register_task_with_scheduler(task_record)
+    _save_scheduled_tasks()
+
+    logger.info(f"[Scheduler] Created task '{task_id}' for agent '{agent_name}': {task_message[:80]}")
+    return jsonify({"status": "success", "task": task_record}), 200
+
+@app.route("/api/scheduled_tasks/<task_id>", methods=["DELETE"])
+def api_delete_scheduled_task(task_id):
+    """Delete a scheduled task."""
+    try:
+        _scheduler.remove_job(task_id)
+    except Exception:
+        pass  # Job may not exist in scheduler
+    hub_memory["scheduled_tasks"] = [t for t in hub_memory["scheduled_tasks"] if t["id"] != task_id]
+    _save_scheduled_tasks()
+    logger.info(f"[Scheduler] Deleted task '{task_id}'.")
+    return jsonify({"status": "success"}), 200
+
+@app.route("/api/scheduled_tasks/<task_id>/toggle", methods=["POST"])
+def api_toggle_scheduled_task(task_id):
+    """Enable or disable a scheduled task."""
+    for t in hub_memory["scheduled_tasks"]:
+        if t["id"] == task_id:
+            t["enabled"] = not t.get("enabled", True)
+            if t["enabled"]:
+                _register_task_with_scheduler(t)
+            else:
+                try:
+                    _scheduler.remove_job(task_id)
+                except Exception:
+                    pass
+            _save_scheduled_tasks()
+            return jsonify({"status": "success", "enabled": t["enabled"]}), 200
+    return jsonify({"status": "error", "message": "Task not found."}), 404
 
 
 # ─── Software Update System ───

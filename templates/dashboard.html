@@ -233,6 +233,7 @@
             <button class="tab-link" id="approvals-tab-btn" onclick="openTab(event, 'approvals-tab')">Pending Approvals <span id="approval-badge" class="badge" style="display:none;">0</span></button>
             <button class="tab-link" onclick="openTab(event, 'settings-tab')">Admin Settings</button>
             <button class="tab-link" onclick="openTab(event, 'plugins-tab')">Plugin Management</button>
+            <button class="tab-link" onclick="openTab(event, 'scheduler-tab')">Scheduled Tasks</button>
         </div>
 
         <div id="dashboard-tab" class="tab-content" style="display: block;">
@@ -515,6 +516,58 @@
                 </div>
             </div>
         </div>
+        <div id="scheduler-tab" class="tab-content">
+            <div class="section">
+                <h2>Scheduled Tasks</h2>
+                <p style="color: #aaa;">Create recurring tasks that run on a schedule. The agent must be running to receive scheduled tasks.</p>
+
+                <form id="add-scheduled-task-form" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 15px; padding: 20px; border: 1px solid #444; border-radius: 8px; background: #1a1a2e;">
+                    <div>
+                        <label for="sched-agent-name">Target Agent:</label>
+                        <select id="sched-agent-name" style="width: 100%; padding: 6px;">
+                            <option value="">-- Select an agent --</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="sched-type">Schedule Type:</label>
+                        <select id="sched-type" style="width: 100%; padding: 6px;" onchange="toggleScheduleFields()">
+                            <option value="interval">Every N hours</option>
+                            <option value="cron">Specific time (cron)</option>
+                        </select>
+                    </div>
+                    <div id="interval-fields">
+                        <label for="sched-interval-hours">Run every (hours):</label>
+                        <input type="number" id="sched-interval-hours" value="6" min="1" max="720" style="width: 100%; padding: 6px;">
+                    </div>
+                    <div id="cron-fields" style="display: none;">
+                        <label for="sched-cron-hour">Hour (0-23):</label>
+                        <input type="number" id="sched-cron-hour" value="9" min="0" max="23" style="width: 80px; padding: 6px;">
+                        <label for="sched-cron-minute" style="margin-left: 10px;">Minute (0-59):</label>
+                        <input type="number" id="sched-cron-minute" value="0" min="0" max="59" style="width: 80px; padding: 6px;">
+                        <label for="sched-cron-days" style="margin-left: 10px;">Days:</label>
+                        <select id="sched-cron-days" style="padding: 6px;">
+                            <option value="*">Every day</option>
+                            <option value="mon-fri">Weekdays (Mon-Fri)</option>
+                            <option value="sat,sun">Weekends</option>
+                            <option value="mon">Monday</option>
+                            <option value="mon,wed,fri">Mon / Wed / Fri</option>
+                            <option value="tue,thu">Tue / Thu</option>
+                        </select>
+                    </div>
+                    <div style="grid-column: 1 / span 2;">
+                        <label for="sched-task-message">Task / Goal:</label>
+                        <textarea id="sched-task-message" rows="3" style="width: 100%; padding: 6px;" placeholder="e.g., Check weather for Tacoma WA and send a summary"></textarea>
+                    </div>
+                    <div style="grid-column: 1 / span 2;">
+                        <button type="submit" style="padding: 8px 20px; cursor: pointer;">Create Scheduled Task</button>
+                    </div>
+                </form>
+
+                <h3 style="margin-top: 25px;">Active Scheduled Tasks</h3>
+                <div id="scheduled-tasks-list"><p style="color: #888;">Loading...</p></div>
+            </div>
+        </div>
+
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
@@ -670,6 +723,153 @@
             } catch (error) {
                 console.error('Error fetching HuggingFace models:', error);
                 select.innerHTML = '<option value="">-- Failed to load models --</option>';
+            }
+        }
+
+        // --- Scheduled Tasks Functions ---
+        function toggleScheduleFields() {
+            const type = document.getElementById('sched-type').value;
+            document.getElementById('interval-fields').style.display = type === 'interval' ? 'block' : 'none';
+            document.getElementById('cron-fields').style.display = type === 'cron' ? 'block' : 'none';
+        }
+
+        function formatSchedule(task) {
+            if (task.schedule_type === 'cron') {
+                const h = String(task.cron_hour || 0).padStart(2, '0');
+                const m = String(task.cron_minute || 0).padStart(2, '0');
+                let days = task.cron_days || '*';
+                if (days === '*') days = 'Every day';
+                else if (days === 'mon-fri') days = 'Weekdays';
+                else if (days === 'sat,sun') days = 'Weekends';
+                return `${days} at ${h}:${m}`;
+            } else {
+                const hours = (task.interval_seconds || 3600) / 3600;
+                if (hours === 1) return 'Every hour';
+                return `Every ${hours} hours`;
+            }
+        }
+
+        function populateSchedulerAgentDropdown() {
+            const select = document.getElementById('sched-agent-name');
+            const current = select.value;
+            const agents = Object.keys(hub_memory_cache.active_agents || {});
+            select.innerHTML = '<option value="">-- Select an agent --</option>';
+            agents.forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                opt.textContent = name;
+                if (name === current) opt.selected = true;
+                select.appendChild(opt);
+            });
+        }
+
+        let hub_memory_cache = { active_agents: {} };
+
+        async function fetchAndDisplayScheduledTasks() {
+            try {
+                const response = await fetch('/api/scheduled_tasks');
+                const data = await response.json();
+                const container = document.getElementById('scheduled-tasks-list');
+
+                if (data.status !== 'success' || !data.tasks || data.tasks.length === 0) {
+                    container.innerHTML = '<p style="color: #888;">No scheduled tasks. Create one above.</p>';
+                    return;
+                }
+
+                let html = '<table style="width:100%; border-collapse: collapse;"><thead><tr>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Agent</th>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Task</th>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Schedule</th>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Last Run</th>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Next Run</th>' +
+                    '<th style="text-align:left; padding:8px; border-bottom:1px solid #444;">Actions</th>' +
+                    '</tr></thead><tbody>';
+
+                data.tasks.forEach(t => {
+                    const lastRun = t.last_run ? moment.unix(t.last_run).fromNow() : 'Never';
+                    const nextRun = t.next_run ? moment(t.next_run).fromNow() : (t.enabled ? 'Pending' : 'Disabled');
+                    const statusColor = t.enabled ? '#27ae60' : '#888';
+                    const toggleLabel = t.enabled ? 'Pause' : 'Resume';
+                    const taskPreview = t.task_message.length > 60 ? t.task_message.substring(0, 60) + '...' : t.task_message;
+
+                    html += `<tr style="border-bottom:1px solid #333;">` +
+                        `<td style="padding:8px;">${t.agent_name}</td>` +
+                        `<td style="padding:8px;" title="${t.task_message}">${taskPreview}</td>` +
+                        `<td style="padding:8px;">${formatSchedule(t)}</td>` +
+                        `<td style="padding:8px; color:#aaa;">${lastRun}</td>` +
+                        `<td style="padding:8px; color:${statusColor};">${nextRun}</td>` +
+                        `<td style="padding:8px;">` +
+                            `<button onclick="toggleScheduledTask('${t.id}')" style="padding:4px 10px; cursor:pointer; margin-right:4px;">${toggleLabel}</button>` +
+                            `<button onclick="deleteScheduledTask('${t.id}')" style="padding:4px 10px; cursor:pointer; background:#e74c3c; color:white; border:none; border-radius:3px;">Delete</button>` +
+                        `</td></tr>`;
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('Error fetching scheduled tasks:', error);
+            }
+        }
+
+        async function handleAddScheduledTask(e) {
+            e.preventDefault();
+            const agentName = document.getElementById('sched-agent-name').value;
+            const taskMessage = document.getElementById('sched-task-message').value;
+            const schedType = document.getElementById('sched-type').value;
+
+            if (!agentName || !taskMessage) {
+                alert('Please select an agent and enter a task.');
+                return;
+            }
+
+            const payload = {
+                agent_name: agentName,
+                task_message: taskMessage,
+                schedule_type: schedType
+            };
+
+            if (schedType === 'interval') {
+                payload.interval_hours = parseInt(document.getElementById('sched-interval-hours').value) || 6;
+            } else {
+                payload.cron_hour = parseInt(document.getElementById('sched-cron-hour').value) || 9;
+                payload.cron_minute = parseInt(document.getElementById('sched-cron-minute').value) || 0;
+                payload.cron_days = document.getElementById('sched-cron-days').value || '*';
+            }
+
+            try {
+                const response = await fetch('/api/scheduled_tasks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (data.status === 'success') {
+                    document.getElementById('sched-task-message').value = '';
+                    fetchAndDisplayScheduledTasks();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (error) {
+                alert('Error creating task: ' + error.message);
+            }
+        }
+
+        async function deleteScheduledTask(taskId) {
+            if (!confirm('Delete this scheduled task?')) return;
+            try {
+                await fetch(`/api/scheduled_tasks/${taskId}`, { method: 'DELETE' });
+                fetchAndDisplayScheduledTasks();
+            } catch (error) {
+                alert('Error deleting task: ' + error.message);
+            }
+        }
+
+        async function toggleScheduledTask(taskId) {
+            try {
+                await fetch(`/api/scheduled_tasks/${taskId}/toggle`, { method: 'POST' });
+                fetchAndDisplayScheduledTasks();
+            } catch (error) {
+                alert('Error toggling task: ' + error.message);
             }
         }
 
@@ -962,6 +1162,8 @@
             try {
                 const response = await fetch('/api/agents');
                 const agents = await response.json();
+                hub_memory_cache.active_agents = agents;
+                populateSchedulerAgentDropdown();
                 const agentList = document.getElementById('active-agents-list');
                 agentList.innerHTML = '';
 
@@ -1312,6 +1514,7 @@
             fetchAndDisplayPlugins();
             fetchAutoInstallDepsStatus();
             checkVersionBadge();
+            fetchAndDisplayScheduledTasks();
 
             // Polling for dynamic data
             setInterval(fetchAndDisplayAgents, 10000);
@@ -1321,6 +1524,7 @@
             setInterval(fetchAndDisplayTokenUsage, 5000);
             setInterval(fetchAndDisplayPlugins, 10000);
             setInterval(fetchAutoInstallDepsStatus, 5000);
+            setInterval(fetchAndDisplayScheduledTasks, 10000);
 
             // Attach form submission handlers and other buttons
             document.getElementById('shutdown-hub-button').addEventListener('click', handleShutdownHub);
@@ -1328,6 +1532,7 @@
             document.getElementById('config-form').addEventListener('submit', handleConfigFormSubmit);
             document.getElementById('add-agent-form').addEventListener('submit', handleAddAgentFormSubmit);
             document.getElementById('plugin-upload-form').addEventListener('submit', handlePluginUploadFormSubmit);
+            document.getElementById('add-scheduled-task-form').addEventListener('submit', handleAddScheduledTask);
 
             // Open the default tab
             document.getElementsByClassName("tab-link")[0].click();
