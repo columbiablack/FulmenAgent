@@ -34,6 +34,11 @@ class Planner:
         self.moonshot_client = None # Placeholder for Moonshot OpenAI client
         self.available_moonshot_models = [] # To store a list of available Kimi models (not actively fetched but for consistency)
 
+        self.huggingface_api_key = os.environ.get("HUGGINGFACE_API_KEY")
+        self.huggingface_model = os.environ.get("HUGGINGFACE_MODEL")
+        self.huggingface_client = None
+        self.available_huggingface_models = []
+
         # Initialize LLM providers
         self._initialize_llm_providers()
 
@@ -52,9 +57,11 @@ class Planner:
                          f"OPENROUTER_API_KEY: {'SET' if self.openrouter_api_key else 'NOT SET'}. "
                          f"OLLAMA_BASE_URL: {'SET' if self.ollama_base_url else 'NOT SET'}. "
                          f"MOONSHOT_API_KEY: {'SET' if self.moonshot_api_key else 'NOT SET'}. "
+                         f"HUGGINGFACE_API_KEY: {'SET' if self.huggingface_api_key else 'NOT SET'}. "
                          f"ENABLE_MOONSHOT_AI: {self.llm_provider_settings.get('ENABLE_MOONSHOT_AI')}. "
                          f"ENABLE_OLLAMA: {self.llm_provider_settings.get('ENABLE_OLLAMA')}. "
-                         f"ENABLE_OPENROUTER: {self.llm_provider_settings.get('ENABLE_OPENROUTER')}.")
+                         f"ENABLE_OPENROUTER: {self.llm_provider_settings.get('ENABLE_OPENROUTER')}. "
+                         f"ENABLE_HUGGINGFACE: {self.llm_provider_settings.get('ENABLE_HUGGINGFACE')}.")
 
         # Initialize OpenRouter models if enabled
         if self.llm_provider_settings.get("ENABLE_OPENROUTER") == "yes" and self.openrouter_api_key:
@@ -95,6 +102,15 @@ class Planner:
             )
         elif self.llm_provider_settings.get("ENABLE_MOONSHOT_AI") == "yes" and not self.moonshot_api_key:
             self.logger.warning("MOONSHOT_API_KEY not set, Moonshot AI will not be used.")
+
+        # Initialize HuggingFace client if enabled
+        if self.llm_provider_settings.get("ENABLE_HUGGINGFACE") == "yes" and self.huggingface_api_key:
+            self.huggingface_client = OpenAI(
+                api_key=self.huggingface_api_key,
+                base_url=os.environ.get("HUGGINGFACE_BASE_URL", "https://api-inference.huggingface.co/v1")
+            )
+        elif self.llm_provider_settings.get("ENABLE_HUGGINGFACE") == "yes" and not self.huggingface_api_key:
+            self.logger.warning("HUGGINGFACE_API_KEY not set, HuggingFace will not be used.")
 
     def _get_available_openrouter_models(self, free_only: bool = True) -> List[str]:
         headers = {"Authorization": f"Bearer {self.openrouter_api_key}"}
@@ -192,7 +208,24 @@ class Planner:
                     token_usage["prompt_tokens"] = chat_completion.usage.prompt_tokens
                     token_usage["completion_tokens"] = chat_completion.usage.completion_tokens
                 return {"content": chat_completion.choices[0].message.content, "token_usage": token_usage}
-            
+
+            elif provider == "huggingface" and self.llm_provider_settings.get("ENABLE_HUGGINGFACE") == "yes" and self.huggingface_client:
+                used_model = model if model else (self.huggingface_model or self.base_model)
+                if not used_model:
+                    self.logger.warning(f"No HuggingFace model specified for _call_llm.")
+                    return {"content": "Error: No HuggingFace model specified.", "token_usage": token_usage}
+
+                chat_completion = self.huggingface_client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=used_model,
+                    temperature=temperature,
+                    stream=False
+                )
+                if chat_completion.usage:
+                    token_usage["prompt_tokens"] = chat_completion.usage.prompt_tokens
+                    token_usage["completion_tokens"] = chat_completion.usage.completion_tokens
+                return {"content": chat_completion.choices[0].message.content, "token_usage": token_usage}
+
             else:
                 self.logger.warning(f"LLM provider '{provider}' is either not enabled, not configured, or not supported.")
                 return {"content": f"Error: LLM provider '{provider}' is not enabled, not configured, or not supported.", "token_usage": token_usage}
@@ -205,13 +238,15 @@ class Planner:
         """
         Evaluates a prompt using the LLM and returns the response content and token usage.
         """
-        # Default to OpenRouter if enabled, otherwise try Ollama, then Moonshot
+        # Default to OpenRouter if enabled, otherwise try Ollama, then Moonshot, then HuggingFace
         provider = "openrouter"
         if self.llm_provider_settings.get("ENABLE_OPENROUTER") != "yes":
             if self.llm_provider_settings.get("ENABLE_OLLAMA") == "yes":
                 provider = "ollama"
             elif self.llm_provider_settings.get("ENABLE_MOONSHOT_AI") == "yes":
                 provider = "moonshot"
+            elif self.llm_provider_settings.get("ENABLE_HUGGINGFACE") == "yes":
+                provider = "huggingface"
             else:
                 self.logger.warning("No LLM provider is enabled for evaluation.")
                 return {"content": "No LLM provider enabled.", "token_usage": {"provider": "none", "prompt_tokens": 0, "completion_tokens": 0}}
@@ -228,7 +263,8 @@ class Planner:
         aggregated_token_usage = {"moonshot_ai": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "ollama": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "openrouter": {"prompt_tokens": 0, "completion_tokens": 0},
-                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0}}
+                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
+                                  "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}}
 
         relevant_memories = []
         if self.llm_provider_settings.get("ENABLE_VOYAGE_AI") == "yes":
@@ -331,7 +367,8 @@ Example response:
         aggregated_token_usage = {"moonshot_ai": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "ollama": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "openrouter": {"prompt_tokens": 0, "completion_tokens": 0},
-                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0}}
+                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
+                                  "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}}
         
         experiences_str = "\n".join([json.dumps(exp) for exp in experiences])
         

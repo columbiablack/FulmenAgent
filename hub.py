@@ -42,7 +42,8 @@ hub_memory = {
         "moonshot_ai": {"prompt_tokens": 0, "completion_tokens": 0},
         "ollama": {"prompt_tokens": 0, "completion_tokens": 0},
         "openrouter": {"prompt_tokens": 0, "completion_tokens": 0},
-        "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0}
+        "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
+        "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}
     },
     "global_plugin_preferences": {}, # NEW: To store global enable/disable status for plugins
     "global_auto_install_deps": True, # NEW: Global setting for auto-installing plugin dependencies
@@ -483,14 +484,16 @@ def api_get_config():
     # List of all config keys that should be read from environment
     all_keys = [
         "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "OLLAMA_BASE_URL", "OLLAMA_MODEL",
-        "MOONSHOT_API_KEY", "MOONSHOT_MODEL", "DISCORDAGENT_DISCORD_TOKEN",
+        "MOONSHOT_API_KEY", "MOONSHOT_MODEL", "HUGGINGFACE_API_KEY", "HUGGINGFACE_MODEL",
+        "DISCORDAGENT_DISCORD_TOKEN",
         "DISCORDAGENT_DISCORD_CHANNEL_ID", "TELEGRAMAGENT_TELEGRAM_TOKEN",
         "TELEGRAMAGENT_TELEGRAM_ALLOWED_CHATS", "LINEAGENT_LINE_CHANNEL_SECRET",
         "LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN",
         "TWILIO_PHONE_NUMBER", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_ACCESS_TOKEN",
         "X_CONSUMER_KEY", "X_CONSUMER_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET",
         "EXA_API_KEY",
-        "ENABLE_MOONSHOT_AI", "ENABLE_OLLAMA", "ENABLE_OPENROUTER", "VOYAGE_AI_API_KEY",
+        "ENABLE_MOONSHOT_AI", "ENABLE_OLLAMA", "ENABLE_OPENROUTER", "ENABLE_HUGGINGFACE",
+        "VOYAGE_AI_API_KEY",
         "ENABLE_VOYAGE_AI", "ENABLE_VOICE_TOOLS", "EMAIL_API_SERVICE", "EMAIL_API_AUTH_METHOD",
         "CALENDAR_API_SERVICE", "CALENDAR_API_AUTH_METHOD", "DEFAULT_PROACTIVE_LOOPS",
         "DEFAULT_EXECUTION_MODE", "DEFAULT_BATCH_EXPERIENCE", "DEFAULT_PROACTIVE_INTERVAL"
@@ -498,7 +501,8 @@ def api_get_config():
     
     # List of keys that are sensitive and should be masked
     sensitive_keys = [
-        "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "DISCORDAGENT_DISCORD_TOKEN",
+        "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "HUGGINGFACE_API_KEY",
+        "DISCORDAGENT_DISCORD_TOKEN",
         "TELEGRAMAGENT_TELEGRAM_TOKEN", "LINEAGENT_LINE_CHANNEL_SECRET",
         "LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN", "TWILIO_AUTH_TOKEN",
         "WHATSAPP_ACCESS_TOKEN", "X_CONSUMER_KEY", "X_CONSUMER_SECRET",
@@ -540,7 +544,8 @@ def api_set_config():
 
     # Process all keys from the form
     sensitive_keys = [
-        "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "DISCORDAGENT_DISCORD_TOKEN",
+        "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "HUGGINGFACE_API_KEY",
+        "DISCORDAGENT_DISCORD_TOKEN",
         "TELEGRAMAGENT_TELEGRAM_TOKEN", "LINEAGENT_LINE_CHANNEL_SECRET",
         "LINEAGENT_LINE_CHANNEL_ACCESS_TOKEN", "TWILIO_AUTH_TOKEN",
         "WHATSAPP_ACCESS_TOKEN", "X_CONSUMER_KEY", "X_CONSUMER_SECRET",
@@ -548,7 +553,7 @@ def api_set_config():
         "EXA_API_KEY"
     ]
     
-    checkbox_keys = ["ENABLE_MOONSHOT_AI", "ENABLE_OLLAMA", "ENABLE_OPENROUTER", "ENABLE_VOYAGE_AI", "ENABLE_VOICE_TOOLS"]
+    checkbox_keys = ["ENABLE_MOONSHOT_AI", "ENABLE_OLLAMA", "ENABLE_OPENROUTER", "ENABLE_HUGGINGFACE", "ENABLE_VOYAGE_AI", "ENABLE_VOICE_TOOLS"]
 
     for key, value in data.items():
         if key in sensitive_keys:
@@ -636,6 +641,55 @@ def api_openrouter_models():
         filtered = [m for m in all_models if m["free"]]
 
     return jsonify({"status": "success", "models": filtered}), 200
+
+# Cache for HuggingFace models list
+_huggingface_models_cache = {"data": None, "timestamp": 0}
+HUGGINGFACE_CACHE_TTL = 600  # 10 minutes
+
+@app.route("/api/huggingface/models", methods=["GET"])
+def api_huggingface_models():
+    """Fetch available text-generation models from HuggingFace Inference API."""
+    api_key = os.environ.get("HUGGINGFACE_API_KEY")
+    if not api_key:
+        return jsonify({"status": "error", "message": "HUGGINGFACE_API_KEY not configured."}), 400
+
+    # Check cache
+    now = time.time()
+    if _huggingface_models_cache["data"] and (now - _huggingface_models_cache["timestamp"]) < HUGGINGFACE_CACHE_TTL:
+        all_models = _huggingface_models_cache["data"]
+    else:
+        try:
+            headers = {"Authorization": f"Bearer {api_key}"}
+            resp = requests.get(
+                "https://api-inference.huggingface.co/v1/models",
+                headers=headers,
+                timeout=15
+            )
+            resp.raise_for_status()
+            raw_models = resp.json()
+
+            all_models = []
+            if isinstance(raw_models, list):
+                for m in raw_models:
+                    model_id = m.get("id", "") if isinstance(m, dict) else str(m)
+                    pipeline = m.get("pipeline_tag", "") if isinstance(m, dict) else ""
+                    if pipeline and pipeline != "text-generation":
+                        continue
+                    all_models.append({
+                        "id": model_id,
+                        "name": model_id,
+                        "pipeline": pipeline,
+                    })
+            all_models.sort(key=lambda x: x["name"].lower())
+
+            _huggingface_models_cache["data"] = all_models
+            _huggingface_models_cache["timestamp"] = now
+            logger.info(f"Fetched {len(all_models)} models from HuggingFace.")
+        except Exception as e:
+            logger.error(f"Error fetching HuggingFace models: {e}")
+            return jsonify({"status": "error", "message": f"Failed to fetch models: {e}"}), 500
+
+    return jsonify({"status": "success", "models": all_models}), 200
 
 @app.route("/send_message_to_agent_by_name", methods=["POST"])
 def send_message_to_agent_by_name():
@@ -728,7 +782,8 @@ def reset_hub():
         "moonshot_ai": {"prompt_tokens": 0, "completion_tokens": 0},
         "ollama": {"prompt_tokens": 0, "completion_tokens": 0},
         "openrouter": {"prompt_tokens": 0, "completion_tokens": 0},
-        "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0}
+        "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
+        "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}
     }
     # Keep global_plugin_preferences, global_auto_install_deps, discovered_plugins
 

@@ -280,6 +280,7 @@ class Agent:
                 "ENABLE_OLLAMA": config.get("ENABLE_OLLAMA", "no"),
                 "ENABLE_OPENROUTER": config.get("ENABLE_OPENROUTER", "no"),
                 "ENABLE_VOYAGE_AI": config.get("ENABLE_VOYAGE_AI", "no"),
+                "ENABLE_HUGGINGFACE": config.get("ENABLE_HUGGINGFACE", "no"),
             }
             self.logger.debug(f"LLM Provider Settings for {self.agent_name}: {settings}")
             return settings
@@ -412,7 +413,8 @@ class Agent:
         total_task_token_usage = {"moonshot_ai": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "ollama": {"prompt_tokens": 0, "completion_tokens": 0},
                                   "openrouter": {"prompt_tokens": 0, "completion_tokens": 0},
-                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0}}
+                                  "voyage_ai": {"prompt_tokens": 0, "completion_tokens": 0},
+                                  "huggingface": {"prompt_tokens": 0, "completion_tokens": 0}}
         experiences = []
         plan_attempts = 0
         MAX_PLAN_ATTEMPTS = 3
